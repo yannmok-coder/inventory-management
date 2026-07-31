@@ -120,8 +120,7 @@ function warehousesWithStock(state, itemId) {
  * 많아지면 테이블별로 필요한 행만 insert/update/delete 하는 방식으로
  * 바꾸는 것이 좋습니다.)
  * ------------------------------------------------------------- */
-const mapAdminFromDb = (r) => ({ id: r.id, name: r.name });
-const mapAdminToDb = (a) => ({ id: a.id, name: a.name });
+const mapAdminFromDb = (r) => ({ id: r.id, name: r.name, role: r.role || 'user', status: r.status || 'active' });
 
 const mapWarehouseFromDb = (r) => ({ id: r.id, name: r.name, location: r.location || '' });
 const mapWarehouseToDb = (w) => ({ id: w.id, name: w.name, location: w.location || '' });
@@ -207,7 +206,6 @@ async function saveState(state) {
   const warehouseRows = state.warehouses.map(({ shelves, ...w }) => mapWarehouseToDb(w));
 
   await Promise.all([
-    syncTable('admins', state.admins.map(mapAdminToDb)),
     syncTable('warehouses', warehouseRows),
     syncTable('shelves', flatShelves),
     syncTable('items', state.items.map(mapItemToDb)),
@@ -406,16 +404,19 @@ const NAV_ITEMS = [
   { id: 'admins', label: '관리자 관리', icon: ShieldCheck },
 ];
 
-function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle }) {
+function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle, isAdmin }) {
   const deficitCount = state.items.filter((it) => calc.diff(it) < 0).length;
   const pendingDisposalCount = state.disposals.filter((d) => d.status === 'pending').length;
   const pendingMaintenanceCount = state.maintenance.filter((m) => m.status === 'pending').length;
+  const pendingAdminCount = state.admins.filter((a) => a.status === 'pending').length;
   const badgeFor = (id) => {
     if (id === 'inventory' && deficitCount > 0) return deficitCount;
     if (id === 'disposal' && pendingDisposalCount > 0) return pendingDisposalCount;
     if (id === 'maintenance' && pendingMaintenanceCount > 0) return pendingMaintenanceCount;
+    if (id === 'admins' && pendingAdminCount > 0) return pendingAdminCount;
     return 0;
   };
+  const visibleNavItems = NAV_ITEMS.filter((item) => item.id !== 'admins' || isAdmin);
   return (
     <aside className={`${collapsed ? 'w-16' : 'w-56'} shrink-0 flex flex-col transition-all`} style={{ background: 'var(--sidebar)' }}>
       <div className={`px-3 py-5 flex items-center border-b ${collapsed ? 'justify-center' : 'justify-between gap-2'}`} style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
@@ -450,7 +451,7 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle }) 
         )}
       </div>
       <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto jamul-scrollbar">
-        {NAV_ITEMS.map((item) => {
+        {visibleNavItems.map((item) => {
           const Icon = item.icon;
           const active = activeTab === item.id;
           const badge = badgeFor(item.id);
@@ -467,7 +468,7 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle }) 
               {!collapsed && badge > 0 && (
                 <span
                   className="jamul-mono text-xs px-1.5 py-0.5 rounded-full"
-                  style={{ background: (item.id === 'disposal' || item.id === 'maintenance') ? 'var(--warning)' : 'var(--danger)', color: '#fff' }}
+                  style={{ background: (item.id === 'disposal' || item.id === 'maintenance' || item.id === 'admins') ? 'var(--warning)' : 'var(--danger)', color: '#fff' }}
                 >
                   {badge}
                 </span>
@@ -475,7 +476,7 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle }) 
               {collapsed && badge > 0 && (
                 <span
                   className="absolute top-1 right-1 w-2 h-2 rounded-full"
-                  style={{ background: (item.id === 'disposal' || item.id === 'maintenance') ? 'var(--warning)' : 'var(--danger)' }}
+                  style={{ background: (item.id === 'disposal' || item.id === 'maintenance' || item.id === 'admins') ? 'var(--warning)' : 'var(--danger)' }}
                 />
               )}
             </button>
@@ -496,7 +497,7 @@ const TAB_TITLES = {
   persons: '인원 관리', itemsManage: '품목 관리', maintenance: '정비 입고', disposal: '폐품 관리', log: '물자 이동 로그', admins: '관리자 관리',
 };
 
-function Topbar({ activeTab, currentAdmin, saving, onRefresh, onSwitch }) {
+function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch }) {
   return (
     <header className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
       <div>
@@ -517,6 +518,12 @@ function Topbar({ activeTab, currentAdmin, saving, onRefresh, onSwitch }) {
             {currentAdmin ? currentAdmin[0] : '?'}
           </div>
           <span className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{currentAdmin}</span>
+          <span
+            className="text-xs px-1.5 py-0.5 rounded-full"
+            style={{ background: isAdmin ? 'var(--success-bg)' : 'var(--warning-bg)', color: isAdmin ? 'var(--success)' : 'var(--warning)' }}
+          >
+            {isAdmin ? '관리자' : '일반 사용자'}
+          </span>
           <button onClick={onSwitch} className="p-1.5 rounded-lg hover:bg-gray-100" title="관리자 전환">
             <LogOut size={14} style={{ color: 'var(--ink-soft)' }} />
           </button>
@@ -534,24 +541,32 @@ function LoginGate({ onLogin, onSignup }) {
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [role, setRole] = useState('user'); // 'user' | 'admin'
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const submit = async () => {
     setError('');
+    setNotice('');
     if (!name.trim() || !password) { setError('이름과 비밀번호를 입력해주세요.'); return; }
     if (mode === 'signup' && password !== confirm) { setError('비밀번호가 서로 일치하지 않습니다.'); return; }
     setSubmitting(true);
-    const result = mode === 'login' ? await onLogin(name, password) : await onSignup(name, password);
+    const result = mode === 'login' ? await onLogin(name, password) : await onSignup(name, password, role);
     setSubmitting(false);
-    if (!result.ok) setError(result.message);
+    if (!result.ok) {
+      if (result.pending) setNotice(result.message);
+      else setError(result.message);
+    }
   };
 
   const switchMode = (next) => {
     setMode(next);
     setError('');
+    setNotice('');
     setPassword('');
     setConfirm('');
+    setRole('user');
   };
 
   return (
@@ -586,6 +601,33 @@ function LoginGate({ onLogin, onSignup }) {
         </div>
 
         <div className="space-y-3">
+          {mode === 'signup' && (
+            <div>
+              <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>가입 유형</label>
+              <div className="grid grid-cols-2 gap-2 mt-1">
+                <button
+                  onClick={() => setRole('user')}
+                  className="px-3 py-2 rounded-lg text-sm border"
+                  style={{ borderColor: role === 'user' ? 'var(--accent)' : 'var(--border)', background: role === 'user' ? 'var(--success-bg)' : 'var(--surface)', color: role === 'user' ? 'var(--accent)' : 'var(--ink-soft)' }}
+                >
+                  일반 사용자
+                </button>
+                <button
+                  onClick={() => setRole('admin')}
+                  className="px-3 py-2 rounded-lg text-sm border"
+                  style={{ borderColor: role === 'admin' ? 'var(--accent)' : 'var(--border)', background: role === 'admin' ? 'var(--success-bg)' : 'var(--surface)', color: role === 'admin' ? 'var(--accent)' : 'var(--ink-soft)' }}
+                >
+                  관리자
+                </button>
+              </div>
+              {role === 'admin' && (
+                <p className="text-xs mt-1.5" style={{ color: 'var(--warning)' }}>관리자로 신청하면 기존 관리자의 승인 후 로그인이 가능합니다.</p>
+              )}
+              {role === 'user' && (
+                <p className="text-xs mt-1.5" style={{ color: 'var(--ink-soft)' }}>일반 사용자는 등록 즉시 로그인할 수 있고, 조회만 가능합니다.</p>
+              )}
+            </div>
+          )}
           <div>
             <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>이름</label>
             <input
@@ -625,6 +667,9 @@ function LoginGate({ onLogin, onSignup }) {
 
           {error && (
             <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}>{error}</p>
+          )}
+          {notice && (
+            <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--success-bg)', color: 'var(--success)' }}>{notice}</p>
           )}
 
           <button
@@ -2166,22 +2211,95 @@ function LogView({ state }) {
 /* ---------------------------------------------------------------
  * 관리자 관리
  * ------------------------------------------------------------- */
-function AdminsView({ state, currentAdmin }) {
+function AdminsView({ state, currentAdmin, adminActions, setConfirmState }) {
+  const pending = state.admins.filter((a) => a.status === 'pending');
+  const active = state.admins.filter((a) => a.status !== 'pending');
+
+  const confirmDelete = (a) => {
+    setConfirmState({
+      message: `'${a.name}'님을 삭제하시겠습니까?`,
+      detail: '삭제하면 더 이상 로그인할 수 없습니다.',
+      onConfirm: () => adminActions.deleteAdmin(a.id),
+    });
+  };
+
   return (
     <div className="space-y-4">
+      {pending.length > 0 && (
+        <div className="jamul-card p-4">
+          <h3 className="text-sm font-bold mb-3 flex items-center gap-1.5" style={{ color: 'var(--ink)' }}>
+            <AlertTriangle size={14} color="var(--warning)" />관리자 등록 승인 대기 ({pending.length})
+          </h3>
+          <div className="space-y-2">
+            {pending.map((a) => (
+              <div key={a.id} className="flex items-center justify-between p-2 rounded-lg border" style={{ borderColor: 'var(--border)' }}>
+                <span className="text-sm" style={{ color: 'var(--ink)' }}>{a.name}</span>
+                <div>
+                  <button
+                    onClick={() => adminActions.approveAdmin(a.id)}
+                    className="text-xs px-2.5 py-1.5 rounded-md mr-1 text-white"
+                    style={{ background: 'var(--accent)' }}
+                  >
+                    승인
+                  </button>
+                  <button
+                    onClick={() => setConfirmState({
+                      message: `'${a.name}'님의 관리자 등록 신청을 거절하시겠습니까?`,
+                      onConfirm: () => adminActions.rejectAdmin(a.id),
+                    })}
+                    className="text-xs px-2.5 py-1.5 rounded-md"
+                    style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}
+                  >
+                    거절
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="jamul-card p-4">
-        <h3 className="text-sm font-bold mb-3" style={{ color: 'var(--ink)' }}>등록된 관리자 ({state.admins.length})</h3>
-        <div className="flex flex-wrap gap-2">
-          {state.admins.map((a) => (
-            <span key={a.id} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border" style={{ borderColor: 'var(--border)' }}>
-              <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: 'var(--accent)' }}>{a.name[0]}</span>
-              {a.name}
-              {a.name === currentAdmin && <span className="text-xs px-1.5 py-0.5 rounded-full" style={{ background: 'var(--success-bg)', color: 'var(--success)' }}>나</span>}
-            </span>
-          ))}
+        <h3 className="text-sm font-bold mb-3" style={{ color: 'var(--ink)' }}>등록된 사용자 ({active.length})</h3>
+        <div className="space-y-2">
+          {active.map((a) => {
+            const isMe = a.name === currentAdmin;
+            return (
+              <div key={a.id} className="flex items-center justify-between p-2 rounded-lg border" style={{ borderColor: 'var(--border)' }}>
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: 'var(--accent)' }}>{a.name[0]}</span>
+                  <span className="text-sm" style={{ color: 'var(--ink)' }}>{a.name}</span>
+                  <span
+                    className="text-xs px-1.5 py-0.5 rounded-full"
+                    style={{ background: a.role === 'admin' ? 'var(--success-bg)' : 'var(--warning-bg)', color: a.role === 'admin' ? 'var(--success)' : 'var(--warning)' }}
+                  >
+                    {a.role === 'admin' ? '관리자' : '일반 사용자'}
+                  </span>
+                  {isMe && <span className="text-xs px-1.5 py-0.5 rounded-full" style={{ background: 'var(--border)', color: 'var(--ink-soft)' }}>나</span>}
+                </div>
+                {!isMe && (
+                  <div>
+                    <button
+                      onClick={() => adminActions.setAdminRole(a.id, a.role === 'admin' ? 'user' : 'admin')}
+                      className="text-xs px-2.5 py-1.5 rounded-md border mr-1"
+                      style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
+                    >
+                      {a.role === 'admin' ? '일반 사용자로 변경' : '관리자로 지정'}
+                    </button>
+                    <button
+                      onClick={() => confirmDelete(a)}
+                      className="p-1.5 rounded-md hover:bg-gray-100"
+                    >
+                      <Trash2 size={13} color="var(--danger)" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
         <p className="text-xs mt-3" style={{ color: 'var(--ink-soft)' }}>
-          새 관리자는 로그인 화면의 <b>신규 등록</b> 탭에서 이름과 비밀번호를 정해 직접 등록합니다.
+          새 사용자는 로그인 화면의 <b>신규 등록</b> 탭에서 이름과 비밀번호를 정해 직접 등록합니다. 관리자로 신청하면 이곳에서 승인해야 로그인할 수 있습니다.
         </p>
       </div>
     </div>
@@ -2196,6 +2314,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [currentAdmin, setCurrentAdminState] = useState(null);
+  const [currentRole, setCurrentRole] = useState(null);
   const [adminReady, setAdminReady] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [toast, setToast] = useState(null);
@@ -2234,18 +2353,30 @@ export default function App() {
   };
 
   const handleSession = async (session) => {
-    const name = session?.user?.user_metadata?.name || null;
-    setCurrentAdminState(name);
-    if (name) {
-      try {
-        const loaded = await loadState();
-        setState(loaded);
-      } catch (e) {
-        console.error('Supabase 데이터를 불러오지 못했습니다:', e);
-        showToast('데이터를 불러오지 못했습니다. Supabase 연결 설정을 확인해주세요.', 'danger');
-      }
-    } else {
+    const user = session?.user || null;
+    if (!user) {
+      setCurrentAdminState(null);
+      setCurrentRole(null);
       setState(defaultState());
+      return;
+    }
+    const name = user.user_metadata?.name || null;
+    try {
+      const { data: profile, error: profErr } = await supabase.from('admins').select('*').eq('id', user.id).maybeSingle();
+      if (profErr || !profile || profile.status !== 'active') {
+        await supabase.auth.signOut();
+        setCurrentAdminState(null);
+        setCurrentRole(null);
+        setState(defaultState());
+        return;
+      }
+      setCurrentAdminState(name);
+      setCurrentRole(profile.role || 'user');
+      const loaded = await loadState();
+      setState(loaded);
+    } catch (e) {
+      console.error('데이터를 불러오지 못했습니다:', e);
+      showToast('데이터를 불러오지 못했습니다. Supabase 연결 설정을 확인해주세요.', 'danger');
     }
   };
 
@@ -2265,15 +2396,27 @@ export default function App() {
   const loginAs = async (name, password) => {
     const trimmed = (name || '').trim();
     if (!trimmed || !password) return { ok: false, message: '이름과 비밀번호를 입력해주세요.' };
-    const { error } = await supabase.auth.signInWithPassword({ email: nameToEmail(trimmed), password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email: nameToEmail(trimmed), password });
     if (error) return { ok: false, message: '이름 또는 비밀번호가 올바르지 않습니다.' };
+    const { data: profile } = await supabase.from('admins').select('*').eq('id', data.user.id).maybeSingle();
+    if (!profile) {
+      await supabase.auth.signOut();
+      return { ok: false, message: '계정 정보를 찾을 수 없습니다. 관리자에게 문의해주세요.' };
+    }
+    if (profile.status === 'pending') {
+      await supabase.auth.signOut();
+      return { ok: false, pending: true, message: '아직 관리자 승인 대기 중입니다. 승인 후 로그인해주세요.' };
+    }
     return { ok: true };
   };
 
-  const signUpAdmin = async (name, password) => {
+  const signUpAdmin = async (name, password, role) => {
     const trimmed = (name || '').trim();
     if (!trimmed || !password) return { ok: false, message: '이름과 비밀번호를 입력해주세요.' };
     if (password.length < 6) return { ok: false, message: '비밀번호는 6자 이상이어야 합니다.' };
+    const wantsAdmin = role === 'admin';
+    const noActiveAdmin = !state.admins.some((a) => a.role === 'admin' && a.status === 'active');
+    const status = wantsAdmin ? (noActiveAdmin ? 'active' : 'pending') : 'active';
     const { data, error } = await supabase.auth.signUp({
       email: nameToEmail(trimmed),
       password,
@@ -2284,17 +2427,57 @@ export default function App() {
       return { ok: false, message: already ? '이미 등록된 이름입니다. 로그인해주세요.' : `등록에 실패했습니다: ${error.message}` };
     }
     const userId = data.user?.id;
-    if (userId) {
-      try { await supabase.from('admins').upsert({ id: userId, name: trimmed }); } catch (e) { /* 목록 표시용, 실패해도 로그인은 유지 */ }
+    if (!userId) return { ok: false, message: '등록에 실패했습니다. 다시 시도해주세요.' };
+    const { error: insErr } = await supabase.from('admins').insert({ id: userId, name: trimmed, role: wantsAdmin ? 'admin' : 'user', status });
+    if (insErr) {
+      return { ok: false, message: `등록에 실패했습니다: ${insErr.message}` };
     }
     if (!data.session) {
       return { ok: false, message: '등록되었습니다. 관리자에게 이메일 인증(Confirm email) 설정을 꺼달라고 요청해주세요.' };
+    }
+    if (status === 'pending') {
+      await supabase.auth.signOut();
+      return { ok: false, pending: true, message: '신청이 접수되었습니다. 기존 관리자의 승인 후 등록이 완료됩니다.' };
     }
     return { ok: true };
   };
 
   const switchAdmin = async () => {
     await supabase.auth.signOut();
+  };
+
+  const adminActions = {
+    approveAdmin: async (id) => {
+      const { error } = await supabase.from('admins').update({ status: 'active' }).eq('id', id);
+      if (error) { showToast('승인에 실패했습니다.', 'danger'); return; }
+      setState((prev) => ({ ...prev, admins: prev.admins.map((a) => (a.id === id ? { ...a, status: 'active' } : a)) }));
+      showToast('관리자 등록을 승인했습니다.');
+    },
+    rejectAdmin: async (id) => {
+      const { error } = await supabase.from('admins').delete().eq('id', id);
+      if (error) { showToast('거절 처리에 실패했습니다.', 'danger'); return; }
+      setState((prev) => ({ ...prev, admins: prev.admins.filter((a) => a.id !== id) }));
+      showToast('관리자 신청을 거절했습니다.');
+    },
+    setAdminRole: async (id, role) => {
+      const { error } = await supabase.from('admins').update({ role }).eq('id', id);
+      if (error) { showToast('권한 변경에 실패했습니다.', 'danger'); return; }
+      setState((prev) => ({ ...prev, admins: prev.admins.map((a) => (a.id === id ? { ...a, role } : a)) }));
+      showToast('권한이 변경되었습니다.');
+    },
+    deleteAdmin: async (id) => {
+      const target = state.admins.find((a) => a.id === id);
+      if (!target) return;
+      const activeAdminCount = state.admins.filter((a) => a.role === 'admin' && a.status === 'active').length;
+      if (target.role === 'admin' && target.status === 'active' && activeAdminCount <= 1) {
+        showToast('마지막 남은 관리자는 삭제할 수 없습니다.', 'danger');
+        return;
+      }
+      const { error } = await supabase.from('admins').delete().eq('id', id);
+      if (error) { showToast('삭제에 실패했습니다.', 'danger'); return; }
+      setState((prev) => ({ ...prev, admins: prev.admins.filter((a) => a.id !== id) }));
+      showToast(`'${target.name}'님을 삭제했습니다.`);
+    },
   };
 
   const calc = buildCalc(state);
@@ -2574,30 +2757,40 @@ export default function App() {
     return <LoginGate onLogin={loginAs} onSignup={signUpAdmin} />;
   }
 
+  const isAdmin = currentRole === 'admin';
+  const guardedActions = isAdmin ? actions : Object.fromEntries(
+    Object.keys(actions).map((key) => [key, async () => {
+      showToast('조회 권한만 있습니다. 데이터 변경은 관리자만 가능합니다.', 'danger');
+      return false;
+    }])
+  );
+  const safeActiveTab = (activeTab === 'admins' && !isAdmin) ? 'dashboard' : activeTab;
+
   return (
     <div className="jamul-root flex h-screen w-full overflow-hidden">
       <GlobalStyle />
       <Sidebar
-        activeTab={activeTab}
+        activeTab={safeActiveTab}
         setActiveTab={setActiveTab}
         state={state}
         calc={calc}
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((v) => !v)}
+        isAdmin={isAdmin}
       />
       <div className="flex-1 flex flex-col min-w-0">
-        <Topbar activeTab={activeTab} currentAdmin={currentAdmin} saving={saving} onRefresh={refresh} onSwitch={switchAdmin} />
+        <Topbar activeTab={safeActiveTab} currentAdmin={currentAdmin} isAdmin={isAdmin} saving={saving} onRefresh={refresh} onSwitch={switchAdmin} />
         <main className="flex-1 overflow-y-auto jamul-scrollbar p-6">
-          {activeTab === 'dashboard' && <DashboardView state={state} calc={calc} setActiveTab={setActiveTab} />}
-          {activeTab === 'inventory' && <InventoryView state={state} calc={calc} actions={actions} />}
-          {activeTab === 'warehouses' && <WarehousesView state={state} calc={calc} actions={actions} setConfirmState={setConfirmState} />}
-          {activeTab === 'issuance' && <IssuanceView state={state} calc={calc} actions={actions} showToast={showToast} />}
-          {activeTab === 'persons' && <PersonsView state={state} calc={calc} actions={actions} showToast={showToast} setConfirmState={setConfirmState} />}
-          {activeTab === 'itemsManage' && <ItemsView state={state} calc={calc} actions={actions} setConfirmState={setConfirmState} />}
-          {activeTab === 'maintenance' && <MaintenanceView state={state} calc={calc} actions={actions} setConfirmState={setConfirmState} />}
-          {activeTab === 'disposal' && <DisposalView state={state} calc={calc} actions={actions} setConfirmState={setConfirmState} />}
-          {activeTab === 'log' && <LogView state={state} />}
-          {activeTab === 'admins' && <AdminsView state={state} currentAdmin={currentAdmin} />}
+          {safeActiveTab === 'dashboard' && <DashboardView state={state} calc={calc} setActiveTab={setActiveTab} />}
+          {safeActiveTab === 'inventory' && <InventoryView state={state} calc={calc} actions={guardedActions} />}
+          {safeActiveTab === 'warehouses' && <WarehousesView state={state} calc={calc} actions={guardedActions} setConfirmState={setConfirmState} />}
+          {safeActiveTab === 'issuance' && <IssuanceView state={state} calc={calc} actions={guardedActions} showToast={showToast} />}
+          {safeActiveTab === 'persons' && <PersonsView state={state} calc={calc} actions={guardedActions} showToast={showToast} setConfirmState={setConfirmState} />}
+          {safeActiveTab === 'itemsManage' && <ItemsView state={state} calc={calc} actions={guardedActions} setConfirmState={setConfirmState} />}
+          {safeActiveTab === 'maintenance' && <MaintenanceView state={state} calc={calc} actions={guardedActions} setConfirmState={setConfirmState} />}
+          {safeActiveTab === 'disposal' && <DisposalView state={state} calc={calc} actions={guardedActions} setConfirmState={setConfirmState} />}
+          {safeActiveTab === 'log' && <LogView state={state} />}
+          {safeActiveTab === 'admins' && isAdmin && <AdminsView state={state} currentAdmin={currentAdmin} adminActions={adminActions} setConfirmState={setConfirmState} />}
         </main>
       </div>
       <Toast toast={toast} />
