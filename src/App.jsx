@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Boxes, Warehouse, ArrowLeftRight, Users, Package,
   Trash2, ClipboardList, ShieldCheck, Plus, X, AlertTriangle,
   CheckCircle2, RefreshCw, Search, ChevronDown, ChevronRight,
-  UserPlus, PackagePlus, LogOut, Pencil, Loader2, Menu, LayoutGrid, Scissors, Wrench
+  UserPlus, LogOut, Pencil, Loader2, Menu, LayoutGrid, Scissors, Wrench
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 
@@ -50,7 +50,7 @@ const defaultState = () => ({
 
 const TYPE_LABEL = {
   intake: '입고(신규등록)',
-  addProperty: '재산 추가',
+  addProperty: '재산 수정',
   issue: '불출',
   return: '반납',
   transfer: '창고 이동',
@@ -1162,6 +1162,7 @@ function WarehousesView({ state, calc, actions, setConfirmState }) {
   const [splitTarget, setSplitTarget] = useState(null);
   const [splitBoxId, setSplitBoxId] = useState('');
   const [splitQty, setSplitQty] = useState('');
+  const [expandedItemGroup, setExpandedItemGroup] = useState(null);
 
   const submit = () => { actions.addWarehouse(name, location); setName(''); setLocation(''); };
   const startEdit = (w) => { setEditingId(w.id); setEditName(w.name); setEditLoc(w.location || ''); };
@@ -1214,6 +1215,18 @@ function WarehousesView({ state, calc, actions, setConfirmState }) {
             {state.warehouses.map((w) => {
               const isOpen = expandedWh === w.id;
               const items = state.stock.filter((s) => s.warehouseId === w.id && s.qty > 0);
+              const itemGroups = [];
+              const groupIndex = {};
+              items.forEach((s) => {
+                const it = calc.item(s.itemId);
+                if (!it) return;
+                if (!groupIndex[it.name]) {
+                  groupIndex[it.name] = { name: it.name, itemIds: new Set(), rows: [] };
+                  itemGroups.push(groupIndex[it.name]);
+                }
+                groupIndex[it.name].itemIds.add(s.itemId);
+                groupIndex[it.name].rows.push(s);
+              });
               return (
                 <React.Fragment key={w.id}>
                   <tr className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
@@ -1268,7 +1281,29 @@ function WarehousesView({ state, calc, actions, setConfirmState }) {
                             <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>보관중인 품목이 없습니다.</p>
                           ) : (
                             <div className="space-y-1.5">
-                              {items.map((s) => {
+                              {itemGroups.map((grp) => {
+                                const multi = grp.itemIds.size > 1;
+                                const groupKey = `${w.id}:${grp.name}`;
+                                const isGroupOpen = expandedItemGroup === groupKey;
+                                const rowsToShow = multi ? (isGroupOpen ? grp.rows : []) : grp.rows;
+                                return (
+                                  <div key={grp.name}>
+                                    {multi && (
+                                      <button
+                                        onClick={() => setExpandedItemGroup(isGroupOpen ? null : groupKey)}
+                                        className="w-full flex items-center justify-between py-1.5"
+                                      >
+                                        <span className="inline-flex items-center gap-1.5 text-sm font-medium" style={{ color: 'var(--ink)' }}>
+                                          {isGroupOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                                          {grp.name}
+                                          <span className="text-xs font-normal" style={{ color: 'var(--ink-soft)' }}>({grp.itemIds.size}종 사이즈)</span>
+                                        </span>
+                                        <span className="jamul-mono text-xs" style={{ color: 'var(--ink-soft)' }}>
+                                          {fmtNum(grp.rows.reduce((a, b) => a + b.qty, 0))}
+                                        </span>
+                                      </button>
+                                    )}
+                              {rowsToShow.map((s) => {
                                 const it = calc.item(s.itemId);
                                 if (!it) return null;
                                 const isEditingThis = editingStock === s.id;
@@ -1357,6 +1392,9 @@ function WarehousesView({ state, calc, actions, setConfirmState }) {
                                         </div>
                                       </div>
                                     )}
+                                  </div>
+                                );
+                              })}
                                   </div>
                                 );
                               })}
@@ -1768,31 +1806,33 @@ function CreateItemModal({ state, actions, onClose }) {
   );
 }
 
-function AddPropertyModal({ itemId, state, calc, actions, onClose }) {
+function AdjustPropertyModal({ itemId, state, calc, actions, onClose }) {
   const item = calc.item(itemId);
-  const [qty, setQty] = useState('');
+  const [delta, setDelta] = useState('');
   const [warehouseId, setWarehouseId] = useState('');
 
   const submit = async () => {
-    await actions.addProperty(itemId, qty, warehouseId);
+    await actions.adjustProperty(itemId, delta, warehouseId);
     onClose();
   };
 
   return (
-    <Modal title={`재산 추가 · ${item?.name || ''}`} onClose={onClose}>
+    <Modal title={`재산 수정 · ${item?.name || ''}`} onClose={onClose}>
       <div className="space-y-3">
+        <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>현재 재산수량: {fmtNum(item?.propertyQty || 0)}{item?.unit}</p>
         <div>
-          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>추가 수량</label>
-          <input type="number" value={qty} onChange={(e) => setQty(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>변경 수량 (늘리려면 양수, 줄이려면 음수)</label>
+          <input type="number" value={delta} onChange={(e) => setDelta(e.target.value)} placeholder="예: 5 (증가) 또는 -3 (감소)" className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
         </div>
         <div>
-          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>입고할 창고</label>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>대상 창고</label>
           <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
             <option value="">선택</option>
             {state.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
+          <p className="text-xs mt-1" style={{ color: 'var(--ink-soft)' }}>양수는 선택한 창고에 입고, 음수는 선택한 창고에서 차감됩니다.</p>
         </div>
-        <button onClick={submit} className="jamul-btn-primary w-full rounded-lg py-2.5 text-sm font-medium mt-2">추가</button>
+        <button onClick={submit} className="jamul-btn-primary w-full rounded-lg py-2.5 text-sm font-medium mt-2">수정</button>
       </div>
     </Modal>
   );
@@ -1800,13 +1840,52 @@ function AddPropertyModal({ itemId, state, calc, actions, onClose }) {
 
 function ItemsView({ state, calc, actions, setConfirmState }) {
   const [showCreate, setShowCreate] = useState(false);
-  const [addPropItem, setAddPropItem] = useState(null);
+  const [adjustPropItem, setAdjustPropItem] = useState(null);
   const [seasonFilter, setSeasonFilter] = useState('all');
   const [partFilter, setPartFilter] = useState('all');
+  const [expandedGroup, setExpandedGroup] = useState(null);
 
   const filteredItems = state.items.filter((it) =>
     (seasonFilter === 'all' || it.season === seasonFilter) &&
     (partFilter === 'all' || it.part === partFilter)
+  );
+
+  const groups = [];
+  const groupIndex = {};
+  filteredItems.forEach((it) => {
+    if (!groupIndex[it.name]) {
+      groupIndex[it.name] = { name: it.name, items: [] };
+      groups.push(groupIndex[it.name]);
+    }
+    groupIndex[it.name].items.push(it);
+  });
+
+  const renderItemRow = (it, indent) => (
+    <tr key={it.id} className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
+      <td className={`px-4 py-3 ${indent ? 'pl-10' : 'font-medium'}`} style={{ color: indent ? 'var(--ink-soft)' : 'var(--ink)' }}>{it.name}</td>
+      <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.season || '-'}</td>
+      <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.part || '-'}</td>
+      <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.size || '-'}</td>
+      <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.unit || '-'}</td>
+      <td className="px-4 py-3 text-right jamul-mono">{fmtNum(it.propertyQty)}</td>
+      <td className="px-4 py-3 text-right jamul-mono" style={{ color: calc.maintenanceQty(it.id) > 0 ? 'var(--warning)' : 'var(--ink-soft)' }}>{fmtNum(calc.maintenanceQty(it.id))}</td>
+      <td className="px-4 py-3 text-right"><DiffBadge value={calc.diff(it)} /></td>
+      <td className="px-4 py-3 text-right">
+        <button onClick={() => setAdjustPropItem(it.id)} className="text-xs px-2.5 py-1.5 rounded-md border inline-flex items-center gap-1 mr-1" style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}>
+          <Pencil size={12} />재산 수정
+        </button>
+        <button
+          onClick={() => setConfirmState({
+            message: `'${it.name}' 품목을 삭제하시겠습니까?`,
+            detail: '보유/불출 수량이 남아있으면 삭제할 수 없습니다.',
+            onConfirm: () => actions.deleteItem(it.id),
+          })}
+          className="p-1.5 rounded-md hover:bg-gray-100"
+        >
+          <Trash2 size={13} color="var(--danger)" />
+        </button>
+      </td>
+    </tr>
   );
 
   return (
@@ -1843,42 +1922,49 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
             </tr>
           </thead>
           <tbody>
-            {filteredItems.length === 0 && (
+            {groups.length === 0 && (
               <tr><td colSpan={9} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--ink-soft)' }}>등록된 품목이 없습니다.</td></tr>
             )}
-            {filteredItems.map((it) => (
-              <tr key={it.id} className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
-                <td className="px-4 py-3 font-medium" style={{ color: 'var(--ink)' }}>{it.name}</td>
-                <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.season || '-'}</td>
-                <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.part || '-'}</td>
-                <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.size || '-'}</td>
-                <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.unit || '-'}</td>
-                <td className="px-4 py-3 text-right jamul-mono">{fmtNum(it.propertyQty)}</td>
-                <td className="px-4 py-3 text-right jamul-mono" style={{ color: calc.maintenanceQty(it.id) > 0 ? 'var(--warning)' : 'var(--ink-soft)' }}>{fmtNum(calc.maintenanceQty(it.id))}</td>
-                <td className="px-4 py-3 text-right"><DiffBadge value={calc.diff(it)} /></td>
-                <td className="px-4 py-3 text-right">
-                  <button onClick={() => setAddPropItem(it.id)} className="text-xs px-2.5 py-1.5 rounded-md border inline-flex items-center gap-1 mr-1" style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}>
-                    <PackagePlus size={12} />재산 추가
-                  </button>
-                  <button
-                    onClick={() => setConfirmState({
-                      message: `'${it.name}' 품목을 삭제하시겠습니까?`,
-                      detail: '보유/불출 수량이 남아있으면 삭제할 수 없습니다.',
-                      onConfirm: () => actions.deleteItem(it.id),
-                    })}
-                    className="p-1.5 rounded-md hover:bg-gray-100"
+            {groups.map((g) => {
+              if (g.items.length === 1) {
+                return renderItemRow(g.items[0], false);
+              }
+              const isOpen = expandedGroup === g.name;
+              const totalProperty = g.items.reduce((a, b) => a + b.propertyQty, 0);
+              const totalMaint = g.items.reduce((a, b) => a + calc.maintenanceQty(b.id), 0);
+              return (
+                <React.Fragment key={g.name}>
+                  <tr
+                    className="cursor-pointer border-b last:border-0"
+                    style={{ borderColor: 'var(--border)', background: '#FAFBFC' }}
+                    onClick={() => setExpandedGroup(isOpen ? null : g.name)}
                   >
-                    <Trash2 size={13} color="var(--danger)" />
-                  </button>
-                </td>
-              </tr>
-            ))}
+                    <td className="px-4 py-3 font-semibold">
+                      <span className="inline-flex items-center gap-1.5" style={{ color: 'var(--ink)' }}>
+                        {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        {g.name}
+                        <span className="text-xs font-normal" style={{ color: 'var(--ink-soft)' }}>({g.items.length}종 사이즈)</span>
+                      </span>
+                    </td>
+                    <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>—</td>
+                    <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>—</td>
+                    <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>—</td>
+                    <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>—</td>
+                    <td className="px-4 py-3 text-right jamul-mono font-semibold">{fmtNum(totalProperty)}</td>
+                    <td className="px-4 py-3 text-right jamul-mono" style={{ color: totalMaint > 0 ? 'var(--warning)' : 'var(--ink-soft)' }}>{fmtNum(totalMaint)}</td>
+                    <td className="px-4 py-3 text-right" style={{ color: 'var(--ink-soft)' }}>—</td>
+                    <td className="px-4 py-3 text-right" style={{ color: 'var(--ink-soft)' }}>—</td>
+                  </tr>
+                  {isOpen && g.items.map((it) => renderItemRow(it, true))}
+                </React.Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
       {showCreate && <CreateItemModal state={state} actions={actions} onClose={() => setShowCreate(false)} />}
-      {addPropItem && <AddPropertyModal itemId={addPropItem} state={state} calc={calc} actions={actions} onClose={() => setAddPropItem(null)} />}
+      {adjustPropItem && <AdjustPropertyModal itemId={adjustPropItem} state={state} calc={calc} actions={actions} onClose={() => setAdjustPropItem(null)} />}
     </div>
   );
 }
@@ -1908,7 +1994,7 @@ function DisposalView({ state, calc, actions, setConfirmState }) {
         <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
           <select value={itemId} onChange={(e) => { setItemId(e.target.value); setWarehouseId(''); }} className="border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
             <option value="">품목 선택</option>
-            {state.items.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
+            {state.items.map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
           </select>
           <input value={selectedItem?.size || ''} disabled placeholder="사이즈" className="border rounded-lg px-3 py-2 text-sm bg-gray-50" style={{ borderColor: 'var(--border)', color: 'var(--ink-soft)' }} />
           <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} className="border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
@@ -2543,9 +2629,10 @@ export default function App() {
       return true;
     },
     addItem: async ({ name, size, unit, propertyQty, warehouseId, boxId, season, part }) => {
-      if (!name.trim()) { showToast('품목명을 입력해주세요.', 'danger'); return; }
+      const trimmedName = name.trim();
+      if (!trimmedName) { showToast('품목명을 입력해주세요.', 'danger'); return; }
       const qty = Number(propertyQty) || 0;
-      const item = { id: uid('it'), name: name.trim(), size: (size || '').trim(), unit: (unit || '').trim(), propertyQty: qty, season: season || '', part: part || '' };
+      const item = { id: uid('it'), name: trimmedName, size: (size || '').trim(), unit: (unit || '').trim(), propertyQty: qty, season: season || '', part: part || '' };
       let stock = state.stock;
       let log = state.log;
       if (qty > 0) {
@@ -2556,23 +2643,44 @@ export default function App() {
       await persist({ ...state, items: [...state.items, item], stock, log });
       showToast(`'${item.name}' 품목이 등록되었습니다.`);
     },
-    addProperty: async (itemId, qty, warehouseId) => {
-      const q = Number(qty) || 0;
-      if (q <= 0 || !warehouseId) { showToast('수량과 창고를 확인해주세요.', 'danger'); return; }
-      const items = state.items.map((it) => (it.id === itemId ? { ...it, propertyQty: it.propertyQty + q } : it));
-      const idx = state.stock.findIndex((s) => s.itemId === itemId && s.warehouseId === warehouseId);
-      let stock = [...state.stock];
-      if (idx >= 0) stock[idx] = { ...stock[idx], qty: stock[idx].qty + q };
-      else stock.push({ id: uid('st'), itemId, warehouseId, qty: q, boxId: '' });
-      const log = [...state.log, makeLog({ type: 'addProperty', itemName: calc.itemName(itemId), qty: q, warehouseName: calc.whName(warehouseId), detail: '재산 추가' })];
-      await persist({ ...state, items, stock, log });
-      showToast('재산 수량이 추가되었습니다.');
+    adjustProperty: async (itemId, delta, warehouseId) => {
+      const d = Number(delta);
+      if (!d || isNaN(d)) { showToast('변경 수량을 입력해주세요.', 'danger'); return; }
+      if (!warehouseId) { showToast('창고를 선택해주세요.', 'danger'); return; }
+      const it = calc.item(itemId);
+      if (!it) return;
+      if (d > 0) {
+        const idx = state.stock.findIndex((s) => s.itemId === itemId && s.warehouseId === warehouseId);
+        let stock = [...state.stock];
+        if (idx >= 0) stock[idx] = { ...stock[idx], qty: stock[idx].qty + d };
+        else stock.push({ id: uid('st'), itemId, warehouseId, qty: d, boxId: '' });
+        const items = state.items.map((x) => (x.id === itemId ? { ...x, propertyQty: x.propertyQty + d } : x));
+        const log = [...state.log, makeLog({ type: 'addProperty', itemName: it.name, qty: d, warehouseName: calc.whName(warehouseId), detail: '재산 수정 (증가)' })];
+        await persist({ ...state, items, stock, log });
+        showToast('재산 수량이 수정되었습니다.');
+      } else {
+        const need = Math.abs(d);
+        const avail = calc.stockAt(itemId, warehouseId);
+        if (need > avail) { showToast('선택한 창고의 보유수량보다 많이 줄일 수 없습니다.', 'danger'); return; }
+        const { stock } = consumeFromRows(state.stock, itemId, warehouseId, need);
+        const items = state.items.map((x) => (x.id === itemId ? { ...x, propertyQty: Math.max(0, x.propertyQty - need) } : x));
+        const log = [...state.log, makeLog({ type: 'addProperty', itemName: it.name, qty: -need, warehouseName: calc.whName(warehouseId), detail: '재산 수정 (감소)' })];
+        await persist({ ...state, items, stock, log });
+        showToast('재산 수량이 수정되었습니다.');
+      }
     },
     deleteItem: async (id) => {
       const stockSum = calc.totalStock(id);
       const heldSum = calc.totalHeld(id);
       const maintSum = calc.maintenanceQty(id);
-      if (stockSum > 0 || heldSum > 0 || maintSum > 0) { showToast('보유·불출·정비입고 중인 수량이 있어 삭제할 수 없습니다.', 'danger'); return; }
+      if (stockSum > 0 || heldSum > 0 || maintSum > 0) {
+        const reasons = [];
+        if (stockSum > 0) reasons.push(`창고 보유수량 ${fmtNum(stockSum)}개`);
+        if (heldSum > 0) reasons.push(`불출중 ${fmtNum(heldSum)}개`);
+        if (maintSum > 0) reasons.push(`정비입고중 ${fmtNum(maintSum)}개`);
+        showToast(`${reasons.join(', ')}이(가) 남아있어 삭제할 수 없습니다.`, 'danger');
+        return;
+      }
       await persist({ ...state, items: state.items.filter((it) => it.id !== id) });
       showToast('품목이 삭제되었습니다.');
     },
