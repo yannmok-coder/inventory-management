@@ -1,11 +1,17 @@
 -- 물자관리시스템 Supabase 스키마
 -- Supabase 프로젝트 대시보드 > SQL Editor 에서 이 스크립트 전체를 실행하세요.
--- (New query 로 붙여넣고 Run 하면 됩니다.)
+-- (New query 로 붙여넣고 Run 하면 됩니다. 여러 번 실행해도 안전합니다.)
 
 create table if not exists admins (
   id text primary key,
-  name text not null
+  name text not null,
+  role text not null default 'user',    -- 'admin' | 'user'
+  status text not null default 'active' -- 'active' | 'pending'
 );
+
+-- 이미 admins 테이블이 있던 경우를 위해 컬럼을 안전하게 추가
+alter table admins add column if not exists role text not null default 'user';
+alter table admins add column if not exists status text not null default 'active';
 
 create table if not exists warehouses (
   id text primary key,
@@ -102,10 +108,42 @@ create table if not exists movement_log (
 create index if not exists idx_log_date on movement_log(date desc);
 
 -- ---------------------------------------------------------------
+-- 권한 체크용 함수
+-- 현재 로그인한 사용자가 "승인된 관리자(role=admin, status=active)"인지
+-- 확인합니다. RLS 정책들에서 반복 사용합니다.
+-- ---------------------------------------------------------------
+create or replace function is_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from admins me
+    where me.id = auth.uid()::text
+      and me.role = 'admin'
+      and me.status = 'active'
+  );
+$$;
+
+-- 활성 관리자가 한 명도 없는지 확인 (최초 가입자 자동 승인용)
+create or replace function no_active_admin_exists()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select not exists (
+    select 1 from admins a where a.role = 'admin' and a.status = 'active'
+  );
+$$;
+
+-- ---------------------------------------------------------------
 -- Row Level Security
--- 이제 관리자는 Supabase Auth(이메일+비밀번호)로 로그인합니다. 그래서
--- anon key로는 아무 데이터도 읽고 쓸 수 없게 막고, 로그인(=authenticated
--- 상태)한 사용자에게만 전체 읽기/쓰기를 허용합니다.
+-- 읽기(조회)는 로그인한 모든 사용자(관리자·일반 사용자)에게 허용하고,
+-- 추가/수정/삭제는 "승인된 관리자"만 가능하도록 제한합니다.
 -- 이 스크립트는 다시 실행해도 안전하도록 기존 정책을 먼저 지우고 새로 만듭니다.
 -- ---------------------------------------------------------------
 alter table admins enable row level security;
@@ -119,7 +157,7 @@ alter table disposals enable row level security;
 alter table maintenance enable row level security;
 alter table movement_log enable row level security;
 
--- 이전 버전(익명 전체 허용)의 정책이 남아있다면 제거
+-- 이전 버전의 정책이 남아있다면 모두 제거
 drop policy if exists "allow all - admins" on admins;
 drop policy if exists "allow all - warehouses" on warehouses;
 drop policy if exists "allow all - shelves" on shelves;
@@ -131,14 +169,11 @@ drop policy if exists "allow all - disposals" on disposals;
 drop policy if exists "allow all - maintenance" on maintenance;
 drop policy if exists "allow all - movement_log" on movement_log;
 
--- admins 테이블: 이름 목록 조회는 로그인한 누구나 가능,
--- 새 행 추가는 "본인 계정(id)"으로만 가능 (회원가입 직후 자기 자신을 등록)
 drop policy if exists "read - admins" on admins;
 drop policy if exists "insert own - admins" on admins;
-create policy "read - admins" on admins for select using (auth.role() = 'authenticated');
-create policy "insert own - admins" on admins for insert with check (auth.uid() = id);
+drop policy if exists "admin update - admins" on admins;
+drop policy if exists "admin delete - admins" on admins;
 
--- 나머지 업무 테이블: 로그인한 관리자에게 전체 읽기/쓰기 허용
 drop policy if exists "authenticated full access - warehouses" on warehouses;
 drop policy if exists "authenticated full access - shelves" on shelves;
 drop policy if exists "authenticated full access - items" on items;
@@ -149,15 +184,113 @@ drop policy if exists "authenticated full access - disposals" on disposals;
 drop policy if exists "authenticated full access - maintenance" on maintenance;
 drop policy if exists "authenticated full access - movement_log" on movement_log;
 
-create policy "authenticated full access - warehouses" on warehouses for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated full access - shelves" on shelves for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated full access - items" on items for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated full access - stock" on stock for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated full access - persons" on persons for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated full access - holdings" on holdings for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated full access - disposals" on disposals for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated full access - maintenance" on maintenance for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "authenticated full access - movement_log" on movement_log for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+drop policy if exists "read - warehouses" on warehouses;
+drop policy if exists "admin write - warehouses" on warehouses;
+drop policy if exists "admin update - warehouses" on warehouses;
+drop policy if exists "admin delete - warehouses" on warehouses;
+
+drop policy if exists "read - shelves" on shelves;
+drop policy if exists "admin write - shelves" on shelves;
+drop policy if exists "admin update - shelves" on shelves;
+drop policy if exists "admin delete - shelves" on shelves;
+
+drop policy if exists "read - items" on items;
+drop policy if exists "admin write - items" on items;
+drop policy if exists "admin update - items" on items;
+drop policy if exists "admin delete - items" on items;
+
+drop policy if exists "read - stock" on stock;
+drop policy if exists "admin write - stock" on stock;
+drop policy if exists "admin update - stock" on stock;
+drop policy if exists "admin delete - stock" on stock;
+
+drop policy if exists "read - persons" on persons;
+drop policy if exists "admin write - persons" on persons;
+drop policy if exists "admin update - persons" on persons;
+drop policy if exists "admin delete - persons" on persons;
+
+drop policy if exists "read - holdings" on holdings;
+drop policy if exists "admin write - holdings" on holdings;
+drop policy if exists "admin update - holdings" on holdings;
+drop policy if exists "admin delete - holdings" on holdings;
+
+drop policy if exists "read - disposals" on disposals;
+drop policy if exists "admin write - disposals" on disposals;
+drop policy if exists "admin update - disposals" on disposals;
+drop policy if exists "admin delete - disposals" on disposals;
+
+drop policy if exists "read - maintenance" on maintenance;
+drop policy if exists "admin write - maintenance" on maintenance;
+drop policy if exists "admin update - maintenance" on maintenance;
+drop policy if exists "admin delete - maintenance" on maintenance;
+
+drop policy if exists "read - movement_log" on movement_log;
+drop policy if exists "admin write - movement_log" on movement_log;
+drop policy if exists "admin update - movement_log" on movement_log;
+drop policy if exists "admin delete - movement_log" on movement_log;
+
+-- admins 테이블
+-- 조회: 로그인한 누구나
+-- 등록: 본인 계정으로만, 그리고 (일반 사용자=즉시 active) 또는
+--       (관리자 신청=반드시 pending, 단 활성 관리자가 한 명도 없으면 최초 1명은 즉시 active)
+-- 수정/삭제: 승인된 관리자만
+create policy "read - admins" on admins for select using (auth.role() = 'authenticated');
+create policy "insert own - admins" on admins for insert with check (
+  auth.uid()::text = id
+  and (
+    (role = 'user' and status = 'active')
+    or (role = 'admin' and status = 'pending')
+    or (role = 'admin' and status = 'active' and no_active_admin_exists())
+  )
+);
+create policy "admin update - admins" on admins for update using (is_admin()) with check (is_admin());
+create policy "admin delete - admins" on admins for delete using (is_admin());
+
+-- 나머지 업무 테이블: 조회는 로그인한 누구나, 추가/수정/삭제는 승인된 관리자만
+create policy "read - warehouses" on warehouses for select using (auth.role() = 'authenticated');
+create policy "admin write - warehouses" on warehouses for insert with check (is_admin());
+create policy "admin update - warehouses" on warehouses for update using (is_admin()) with check (is_admin());
+create policy "admin delete - warehouses" on warehouses for delete using (is_admin());
+
+create policy "read - shelves" on shelves for select using (auth.role() = 'authenticated');
+create policy "admin write - shelves" on shelves for insert with check (is_admin());
+create policy "admin update - shelves" on shelves for update using (is_admin()) with check (is_admin());
+create policy "admin delete - shelves" on shelves for delete using (is_admin());
+
+create policy "read - items" on items for select using (auth.role() = 'authenticated');
+create policy "admin write - items" on items for insert with check (is_admin());
+create policy "admin update - items" on items for update using (is_admin()) with check (is_admin());
+create policy "admin delete - items" on items for delete using (is_admin());
+
+create policy "read - stock" on stock for select using (auth.role() = 'authenticated');
+create policy "admin write - stock" on stock for insert with check (is_admin());
+create policy "admin update - stock" on stock for update using (is_admin()) with check (is_admin());
+create policy "admin delete - stock" on stock for delete using (is_admin());
+
+create policy "read - persons" on persons for select using (auth.role() = 'authenticated');
+create policy "admin write - persons" on persons for insert with check (is_admin());
+create policy "admin update - persons" on persons for update using (is_admin()) with check (is_admin());
+create policy "admin delete - persons" on persons for delete using (is_admin());
+
+create policy "read - holdings" on holdings for select using (auth.role() = 'authenticated');
+create policy "admin write - holdings" on holdings for insert with check (is_admin());
+create policy "admin update - holdings" on holdings for update using (is_admin()) with check (is_admin());
+create policy "admin delete - holdings" on holdings for delete using (is_admin());
+
+create policy "read - disposals" on disposals for select using (auth.role() = 'authenticated');
+create policy "admin write - disposals" on disposals for insert with check (is_admin());
+create policy "admin update - disposals" on disposals for update using (is_admin()) with check (is_admin());
+create policy "admin delete - disposals" on disposals for delete using (is_admin());
+
+create policy "read - maintenance" on maintenance for select using (auth.role() = 'authenticated');
+create policy "admin write - maintenance" on maintenance for insert with check (is_admin());
+create policy "admin update - maintenance" on maintenance for update using (is_admin()) with check (is_admin());
+create policy "admin delete - maintenance" on maintenance for delete using (is_admin());
+
+create policy "read - movement_log" on movement_log for select using (auth.role() = 'authenticated');
+create policy "admin write - movement_log" on movement_log for insert with check (is_admin());
+create policy "admin update - movement_log" on movement_log for update using (is_admin()) with check (is_admin());
+create policy "admin delete - movement_log" on movement_log for delete using (is_admin());
 
 -- ---------------------------------------------------------------
 -- ⚠️ 꼭 해야 하는 설정: 이메일 인증(Confirm email) 끄기
