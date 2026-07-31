@@ -3,17 +3,23 @@ import {
   LayoutDashboard, Boxes, Warehouse, ArrowLeftRight, Users, Package,
   Trash2, ClipboardList, ShieldCheck, Plus, X, AlertTriangle,
   CheckCircle2, RefreshCw, Search, ChevronDown, ChevronRight,
-  UserPlus, PackagePlus, LogOut, Pencil, Loader2, Menu, LayoutGrid, Scissors
+  UserPlus, PackagePlus, LogOut, Pencil, Loader2, Menu, LayoutGrid, Scissors, Wrench
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 
 /* ---------------------------------------------------------------
  * 상수 / 유틸
  * ------------------------------------------------------------- */
-const ADMIN_KEY = 'jamul-current-admin-v1';
 const LOGO_DATA_URI = 'data:image/jpeg;base64,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';
 
 const uid = (p = 'id') => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+// Supabase Auth는 이메일 기반 로그인만 지원하므로, 관리자 "이름"을 내부적으로만
+// 쓰이는 고유한 이메일 형태로 변환해 사용합니다. 실제 메일함과는 무관한 값입니다.
+const nameToEmail = (name) => {
+  const bytes = new TextEncoder().encode(name.trim());
+  const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `u${hex}@jamul.local`;
+};
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const nowIso = () => new Date().toISOString();
 const fmtNum = (n) => (Number(n) || 0).toLocaleString('ko-KR');
@@ -38,6 +44,7 @@ const defaultState = () => ({
   persons: [],
   holdings: [],    // { id, itemId, personId, qty }
   disposals: [],   // { id, itemId, itemName, size, qty, reason, warehouseId, warehouseName, status, createdDate, completedDate }
+  maintenance: [], // { id, itemId, itemName, serial, reason, status, warehouseId, warehouseName, createdDate, intakeDate, closedDate }
   log: [],
 });
 
@@ -50,6 +57,9 @@ const TYPE_LABEL = {
   dispose: '폐기 처리',
   adjust: '보유수량 수정',
   split: '위치 분할',
+  maintenanceIn: '정비 입고',
+  maintenanceDone: '정비 완료',
+  maintenanceCancel: '정비 입고 취소',
 };
 
 function buildCalc(state) {
@@ -60,7 +70,9 @@ function buildCalc(state) {
   const totalStock = (itemId) => state.stock.filter((s) => s.itemId === itemId).reduce((a, b) => a + b.qty, 0);
   const totalHeld = (itemId) => state.holdings.filter((h) => h.itemId === itemId).reduce((a, b) => a + b.qty, 0);
   const stockAt = (itemId, whId) => state.stock.filter((s) => s.itemId === itemId && s.warehouseId === whId).reduce((a, b) => a + b.qty, 0);
-  const diff = (it) => totalStock(it.id) + totalHeld(it.id) - it.propertyQty;
+  const maintenanceOutQty = (itemId) => state.maintenance.filter((m) => m.itemId === itemId && m.status === 'in_progress').length;
+  const maintenanceQty = (itemId) => state.maintenance.filter((m) => m.itemId === itemId && (m.status === 'pending' || m.status === 'in_progress')).length;
+  const diff = (it) => totalStock(it.id) + totalHeld(it.id) + maintenanceOutQty(it.id) - it.propertyQty;
   const whStockSum = (whId) => state.stock.filter((s) => s.warehouseId === whId).reduce((a, b) => a + b.qty, 0);
   const pendingDisposal = (itemId) => state.disposals.filter((d) => d.itemId === itemId && d.status === 'pending').reduce((a, b) => a + b.qty, 0);
   const boxLabel = (whId, boxId) => {
@@ -72,7 +84,7 @@ function buildCalc(state) {
     if (!shelf) return '위치 미지정';
     return `${shelf.name} · ${boxNo}번 박스`;
   };
-  return { whName, item, itemName, personName, totalStock, totalHeld, stockAt, diff, whStockSum, pendingDisposal, boxLabel };
+  return { whName, item, itemName, personName, totalStock, totalHeld, stockAt, diff, whStockSum, pendingDisposal, maintenanceQty, boxLabel };
 }
 
 function consumeFromRows(stockArr, itemId, warehouseId, qtyNeeded) {
@@ -132,12 +144,15 @@ const mapHoldingToDb = (h) => ({ id: h.id, item_id: h.itemId, person_id: h.perso
 const mapDisposalFromDb = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, size: r.size || '', qty: r.qty, reason: r.reason || '', warehouseId: r.warehouse_id, warehouseName: r.warehouse_name, status: r.status, createdDate: r.created_date, completedDate: r.completed_date, createdBy: r.created_by });
 const mapDisposalToDb = (d) => ({ id: d.id, item_id: d.itemId, item_name: d.itemName, size: d.size || '', qty: d.qty, reason: d.reason || '', warehouse_id: d.warehouseId, warehouse_name: d.warehouseName, status: d.status, created_date: d.createdDate, completed_date: d.completedDate || null, created_by: d.createdBy || null });
 
+const mapMaintenanceFromDb = (r) => ({ id: r.id, itemId: r.item_id, itemName: r.item_name, serial: r.serial || '', reason: r.reason || '', status: r.status, warehouseId: r.warehouse_id || '', warehouseName: r.warehouse_name || '', createdDate: r.created_date, intakeDate: r.intake_date, closedDate: r.closed_date });
+const mapMaintenanceToDb = (m) => ({ id: m.id, item_id: m.itemId, item_name: m.itemName, serial: m.serial || '', reason: m.reason || '', status: m.status, warehouse_id: m.warehouseId || null, warehouse_name: m.warehouseName || null, created_date: m.createdDate, intake_date: m.intakeDate || null, closed_date: m.closedDate || null });
+
 const mapLogFromDb = (r) => ({ id: r.id, type: r.type, date: r.date, itemName: r.item_name, qty: r.qty, warehouseName: r.warehouse_name, personName: r.person_name, detail: r.detail, actor: r.actor });
 const mapLogToDb = (l) => ({ id: l.id, type: l.type, date: l.date, item_name: l.itemName, qty: l.qty, warehouse_name: l.warehouseName || null, person_name: l.personName || null, detail: l.detail || null, actor: l.actor || null });
 
 async function loadState() {
   const [
-    admins, warehouses, shelves, items, stock, persons, holdings, disposals, log,
+    admins, warehouses, shelves, items, stock, persons, holdings, disposals, maintenance, log,
   ] = await Promise.all([
     supabase.from('admins').select('*'),
     supabase.from('warehouses').select('*'),
@@ -147,9 +162,10 @@ async function loadState() {
     supabase.from('persons').select('*'),
     supabase.from('holdings').select('*'),
     supabase.from('disposals').select('*'),
+    supabase.from('maintenance').select('*'),
     supabase.from('movement_log').select('*'),
   ]);
-  const firstError = [admins, warehouses, shelves, items, stock, persons, holdings, disposals, log]
+  const firstError = [admins, warehouses, shelves, items, stock, persons, holdings, disposals, maintenance, log]
     .map((r) => r.error).find(Boolean);
   if (firstError) throw firstError;
 
@@ -167,6 +183,7 @@ async function loadState() {
     persons: (persons.data || []).map(mapPersonFromDb),
     holdings: (holdings.data || []).map(mapHoldingFromDb),
     disposals: (disposals.data || []).map(mapDisposalFromDb),
+    maintenance: (maintenance.data || []).map(mapMaintenanceFromDb),
     log: (log.data || []).map(mapLogFromDb),
   };
 }
@@ -198,6 +215,7 @@ async function saveState(state) {
     syncTable('persons', state.persons.map(mapPersonToDb)),
     syncTable('holdings', state.holdings.map(mapHoldingToDb)),
     syncTable('disposals', state.disposals.map(mapDisposalToDb)),
+    syncTable('maintenance', state.maintenance.map(mapMaintenanceToDb)),
     syncTable('movement_log', state.log.map(mapLogToDb)),
   ]);
 }
@@ -382,6 +400,7 @@ const NAV_ITEMS = [
   { id: 'issuance', label: '불출 현황', icon: ArrowLeftRight },
   { id: 'persons', label: '인원 관리', icon: Users },
   { id: 'itemsManage', label: '품목 관리', icon: Package },
+  { id: 'maintenance', label: '정비 입고', icon: Wrench },
   { id: 'disposal', label: '폐품 관리', icon: Trash2 },
   { id: 'log', label: '물자 이동 로그', icon: ClipboardList },
   { id: 'admins', label: '관리자 관리', icon: ShieldCheck },
@@ -390,9 +409,11 @@ const NAV_ITEMS = [
 function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle }) {
   const deficitCount = state.items.filter((it) => calc.diff(it) < 0).length;
   const pendingDisposalCount = state.disposals.filter((d) => d.status === 'pending').length;
+  const pendingMaintenanceCount = state.maintenance.filter((m) => m.status === 'pending').length;
   const badgeFor = (id) => {
     if (id === 'inventory' && deficitCount > 0) return deficitCount;
     if (id === 'disposal' && pendingDisposalCount > 0) return pendingDisposalCount;
+    if (id === 'maintenance' && pendingMaintenanceCount > 0) return pendingMaintenanceCount;
     return 0;
   };
   return (
@@ -446,7 +467,7 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle }) 
               {!collapsed && badge > 0 && (
                 <span
                   className="jamul-mono text-xs px-1.5 py-0.5 rounded-full"
-                  style={{ background: item.id === 'disposal' ? 'var(--warning)' : 'var(--danger)', color: '#fff' }}
+                  style={{ background: (item.id === 'disposal' || item.id === 'maintenance') ? 'var(--warning)' : 'var(--danger)', color: '#fff' }}
                 >
                   {badge}
                 </span>
@@ -454,7 +475,7 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle }) 
               {collapsed && badge > 0 && (
                 <span
                   className="absolute top-1 right-1 w-2 h-2 rounded-full"
-                  style={{ background: item.id === 'disposal' ? 'var(--warning)' : 'var(--danger)' }}
+                  style={{ background: (item.id === 'disposal' || item.id === 'maintenance') ? 'var(--warning)' : 'var(--danger)' }}
                 />
               )}
             </button>
@@ -472,7 +493,7 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle }) 
 
 const TAB_TITLES = {
   dashboard: '대시보드', inventory: '재고 현황', warehouses: '창고 관리', issuance: '불출 현황',
-  persons: '인원 관리', itemsManage: '품목 관리', disposal: '폐품 관리', log: '물자 이동 로그', admins: '관리자 관리',
+  persons: '인원 관리', itemsManage: '품목 관리', maintenance: '정비 입고', disposal: '폐품 관리', log: '물자 이동 로그', admins: '관리자 관리',
 };
 
 function Topbar({ activeTab, currentAdmin, saving, onRefresh, onSwitch }) {
@@ -508,8 +529,31 @@ function Topbar({ activeTab, currentAdmin, saving, onRefresh, onSwitch }) {
 /* ---------------------------------------------------------------
  * 로그인 게이트
  * ------------------------------------------------------------- */
-function LoginGate({ admins, onLogin }) {
+function LoginGate({ onLogin, onSignup }) {
+  const [mode, setMode] = useState('login'); // 'login' | 'signup'
   const [name, setName] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async () => {
+    setError('');
+    if (!name.trim() || !password) { setError('이름과 비밀번호를 입력해주세요.'); return; }
+    if (mode === 'signup' && password !== confirm) { setError('비밀번호가 서로 일치하지 않습니다.'); return; }
+    setSubmitting(true);
+    const result = mode === 'login' ? await onLogin(name, password) : await onSignup(name, password);
+    setSubmitting(false);
+    if (!result.ok) setError(result.message);
+  };
+
+  const switchMode = (next) => {
+    setMode(next);
+    setError('');
+    setPassword('');
+    setConfirm('');
+  };
+
   return (
     <div className="jamul-root min-h-screen w-full flex items-center justify-center p-6">
       <GlobalStyle />
@@ -523,34 +567,73 @@ function LoginGate({ admins, onLogin }) {
             <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>재고 · 창고 · 인원 통합관리</p>
           </div>
         </div>
-        <p className="text-sm mt-6 mb-2" style={{ color: 'var(--ink-soft)' }}>등록된 관리자를 선택하세요</p>
-        <div className="flex flex-wrap gap-2 mb-5">
-          {admins.length === 0 && (
-            <span className="text-xs" style={{ color: 'var(--ink-soft)' }}>등록된 관리자가 없습니다. 아래에서 새로 등록해주세요.</span>
-          )}
-          {admins.map((a) => (
-            <button
-              key={a.id}
-              onClick={() => onLogin(a.name)}
-              className="px-3 py-1.5 rounded-full text-sm border jamul-focus"
-              style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}
-            >
-              {a.name}
-            </button>
-          ))}
+
+        <div className="inline-flex rounded-lg border p-0.5 mt-6 mb-5" style={{ borderColor: 'var(--border)' }}>
+          <button
+            onClick={() => switchMode('login')}
+            className="px-4 py-1.5 rounded-md text-sm"
+            style={{ background: mode === 'login' ? 'var(--accent)' : 'transparent', color: mode === 'login' ? '#fff' : 'var(--ink-soft)' }}
+          >
+            로그인
+          </button>
+          <button
+            onClick={() => switchMode('signup')}
+            className="px-4 py-1.5 rounded-md text-sm"
+            style={{ background: mode === 'signup' ? 'var(--accent)' : 'transparent', color: mode === 'signup' ? '#fff' : 'var(--ink-soft)' }}
+          >
+            신규 등록
+          </button>
         </div>
-        <div className="h-px my-4" style={{ background: 'var(--border)' }} />
-        <p className="text-sm mb-2" style={{ color: 'var(--ink-soft)' }}>새 관리자로 등록 후 시작</p>
-        <div className="flex gap-2">
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') onLogin(name); }}
-            placeholder="이름 입력"
-            className="flex-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
-            style={{ borderColor: 'var(--border)' }}
-          />
-          <button onClick={() => onLogin(name)} className="jamul-btn-primary rounded-lg px-4 py-2 text-sm font-medium">시작하기</button>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>이름</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="이름 입력"
+              className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
+              style={{ borderColor: 'var(--border)' }}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>비밀번호</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && mode === 'login') submit(); }}
+              placeholder={mode === 'signup' ? '6자 이상 입력' : '비밀번호 입력'}
+              className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
+              style={{ borderColor: 'var(--border)' }}
+            />
+          </div>
+          {mode === 'signup' && (
+            <div>
+              <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>비밀번호 확인</label>
+              <input
+                type="password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+                placeholder="비밀번호 다시 입력"
+                className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
+                style={{ borderColor: 'var(--border)' }}
+              />
+            </div>
+          )}
+
+          {error && (
+            <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}>{error}</p>
+          )}
+
+          <button
+            onClick={submit}
+            disabled={submitting}
+            className="jamul-btn-primary w-full rounded-lg py-2.5 text-sm font-medium mt-1"
+          >
+            {submitting ? '처리 중...' : mode === 'login' ? '로그인' : '등록하고 시작하기'}
+          </button>
         </div>
       </div>
     </div>
@@ -564,6 +647,7 @@ function DashboardView({ state, calc, setActiveTab }) {
   const totalProperty = state.items.reduce((a, b) => a + b.propertyQty, 0);
   const deficitItems = state.items.filter((it) => calc.diff(it) < 0);
   const pendingDisposals = state.disposals.filter((d) => d.status === 'pending');
+  const maintenanceActive = state.maintenance.filter((m) => m.status === 'pending' || m.status === 'in_progress');
   const recentLog = [...state.log].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
   const heldTotal = state.holdings.reduce((a, b) => a + b.qty, 0);
 
@@ -573,12 +657,13 @@ function DashboardView({ state, calc, setActiveTab }) {
     { label: '등록 인원', value: state.persons.length, unit: '명' },
     { label: '재산 총수량', value: totalProperty, unit: '개' },
     { label: '현재 불출중', value: heldTotal, unit: '개' },
+    { label: '정비입고중', value: maintenanceActive.length, unit: '건', warn: maintenanceActive.length > 0 },
     { label: '폐기 대기', value: pendingDisposals.length, unit: '건', warn: pendingDisposals.length > 0 },
   ];
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
         {cards.map((c, i) => (
           <div key={i} className="jamul-card p-4">
             <p className="text-xs mb-1" style={{ color: 'var(--ink-soft)' }}>{c.label}</p>
@@ -1707,13 +1792,14 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
               <th className="px-4 py-3 font-medium">사이즈</th>
               <th className="px-4 py-3 font-medium">단위</th>
               <th className="px-4 py-3 font-medium text-right">재산수량</th>
+              <th className="px-4 py-3 font-medium text-right">정비입고</th>
               <th className="px-4 py-3 font-medium text-right">과부족</th>
               <th className="px-4 py-3 font-medium text-right">관리</th>
             </tr>
           </thead>
           <tbody>
             {filteredItems.length === 0 && (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--ink-soft)' }}>등록된 품목이 없습니다.</td></tr>
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--ink-soft)' }}>등록된 품목이 없습니다.</td></tr>
             )}
             {filteredItems.map((it) => (
               <tr key={it.id} className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
@@ -1723,6 +1809,7 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
                 <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.size || '-'}</td>
                 <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.unit || '-'}</td>
                 <td className="px-4 py-3 text-right jamul-mono">{fmtNum(it.propertyQty)}</td>
+                <td className="px-4 py-3 text-right jamul-mono" style={{ color: calc.maintenanceQty(it.id) > 0 ? 'var(--warning)' : 'var(--ink-soft)' }}>{fmtNum(calc.maintenanceQty(it.id))}</td>
                 <td className="px-4 py-3 text-right"><DiffBadge value={calc.diff(it)} /></td>
                 <td className="px-4 py-3 text-right">
                   <button onClick={() => setAddPropItem(it.id)} className="text-xs px-2.5 py-1.5 rounded-md border inline-flex items-center gap-1 mr-1" style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}>
@@ -1867,6 +1954,156 @@ function DisposalView({ state, calc, actions, setConfirmState }) {
 }
 
 /* ---------------------------------------------------------------
+ * 정비 입고
+ * ------------------------------------------------------------- */
+function IntakeWarehouseModal({ record, state, calc, actions, onClose }) {
+  const options = warehousesWithStock(state, record.itemId);
+  const [warehouseId, setWarehouseId] = useState(options[0]?.warehouseId || '');
+
+  const submit = async () => {
+    const ok = await actions.startMaintenanceIntake(record.id, warehouseId);
+    if (ok) onClose();
+  };
+
+  return (
+    <Modal title={`정비 입고 처리 · ${record.itemName}`} onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>
+          일련번호: {record.serial || '미기재'} · 사유: {record.reason || '-'}
+        </p>
+        <div>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>반출할 창고</label>
+          <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
+            <option value="">선택</option>
+            {options.map((o) => <option key={o.warehouseId} value={o.warehouseId}>{calc.whName(o.warehouseId)} (보유 {fmtNum(o.qty)})</option>)}
+          </select>
+          {options.length === 0 && <p className="text-xs mt-1" style={{ color: 'var(--danger)' }}>이 품목을 보유중인 창고가 없습니다.</p>}
+        </div>
+        <button onClick={submit} className="jamul-btn-primary w-full rounded-lg py-2.5 text-sm font-medium mt-2">입고 처리</button>
+      </div>
+    </Modal>
+  );
+}
+
+function MaintenanceView({ state, calc, actions, setConfirmState }) {
+  const [itemId, setItemId] = useState('');
+  const [serial, setSerial] = useState('');
+  const [reason, setReason] = useState('');
+  const [intakeTarget, setIntakeTarget] = useState(null);
+
+  const pending = state.maintenance.filter((m) => m.status === 'pending');
+  const inProgress = state.maintenance.filter((m) => m.status === 'in_progress');
+
+  const submit = () => {
+    actions.addMaintenancePending({ itemId, serial, reason });
+    setItemId(''); setSerial(''); setReason('');
+  };
+
+  const confirmComplete = (m) => {
+    setConfirmState({
+      message: `'${m.itemName}' 정비완료 처리하시겠습니까?`,
+      detail: m.status === 'in_progress' ? `창고 재고(${m.warehouseName})로 반영됩니다.` : '대기 상태에서 바로 완료 처리되며, 재고 변동은 없습니다.',
+      onConfirm: () => actions.closeMaintenance(m.id, 'completed'),
+    });
+  };
+  const confirmCancel = (m) => {
+    setConfirmState({
+      message: `'${m.itemName}' 정비입고를 취소하시겠습니까?`,
+      detail: m.status === 'in_progress' ? `창고 재고(${m.warehouseName})로 반영됩니다.` : '대기 목록에서 제거되며, 재고 변동은 없습니다.',
+      onConfirm: () => actions.closeMaintenance(m.id, 'cancelled'),
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="jamul-card p-4">
+        <h3 className="text-sm font-bold mb-3" style={{ color: 'var(--ink)' }}>정비입고 대기 등록</h3>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+          <select value={itemId} onChange={(e) => setItemId(e.target.value)} className="border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
+            <option value="">품목 선택</option>
+            {state.items.map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
+          </select>
+          <input value={serial} onChange={(e) => setSerial(e.target.value)} placeholder="일련번호" className="border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="사유" className="border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          <button onClick={submit} className="jamul-btn-primary rounded-lg px-4 py-2 text-sm font-medium inline-flex items-center justify-center gap-1"><Plus size={14} />등록</button>
+        </div>
+      </div>
+
+      <div className="jamul-card overflow-x-auto">
+        <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+          <h3 className="text-sm font-bold" style={{ color: 'var(--ink)' }}>입고대기 ({pending.length})</h3>
+        </div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left border-b" style={{ borderColor: 'var(--border)', color: 'var(--ink-soft)' }}>
+              <th className="px-4 py-3 font-medium">품명</th>
+              <th className="px-4 py-3 font-medium">일련번호</th>
+              <th className="px-4 py-3 font-medium">사유</th>
+              <th className="px-4 py-3 font-medium text-right">관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pending.length === 0 && (
+              <tr><td colSpan={4} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--ink-soft)' }}>입고 대기중인 품목이 없습니다.</td></tr>
+            )}
+            {pending.map((m) => (
+              <tr key={m.id} className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
+                <td className="px-4 py-3 font-medium" style={{ color: 'var(--ink)' }}>{m.itemName}</td>
+                <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{m.serial || '-'}</td>
+                <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{m.reason || '-'}</td>
+                <td className="px-4 py-3 text-right">
+                  <button onClick={() => setIntakeTarget(m)} className="text-xs px-2.5 py-1.5 rounded-md mr-1 text-white" style={{ background: 'var(--accent)' }}>입고 처리</button>
+                  <button onClick={() => confirmComplete(m)} className="text-xs px-2.5 py-1.5 rounded-md border mr-1" style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}>정비완료</button>
+                  <button onClick={() => confirmCancel(m)} className="text-xs px-2.5 py-1.5 rounded-md" style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}>입고취소</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="jamul-card overflow-x-auto">
+        <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+          <h3 className="text-sm font-bold" style={{ color: 'var(--ink)' }}>입고중 ({inProgress.length})</h3>
+        </div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left border-b" style={{ borderColor: 'var(--border)', color: 'var(--ink-soft)' }}>
+              <th className="px-4 py-3 font-medium">품명</th>
+              <th className="px-4 py-3 font-medium">일련번호</th>
+              <th className="px-4 py-3 font-medium">사유</th>
+              <th className="px-4 py-3 font-medium">입고일</th>
+              <th className="px-4 py-3 font-medium text-right">관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            {inProgress.length === 0 && (
+              <tr><td colSpan={5} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--ink-soft)' }}>입고중인 품목이 없습니다.</td></tr>
+            )}
+            {inProgress.map((m) => (
+              <tr key={m.id} className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
+                <td className="px-4 py-3 font-medium" style={{ color: 'var(--ink)' }}>{m.itemName}</td>
+                <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{m.serial || '-'}</td>
+                <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{m.reason || '-'}</td>
+                <td className="px-4 py-3 jamul-mono text-xs" style={{ color: 'var(--ink-soft)' }}>{fmtDate(m.intakeDate)}</td>
+                <td className="px-4 py-3 text-right">
+                  <button onClick={() => confirmComplete(m)} className="text-xs px-2.5 py-1.5 rounded-md border mr-1" style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}>정비완료</button>
+                  <button onClick={() => confirmCancel(m)} className="text-xs px-2.5 py-1.5 rounded-md" style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}>입고취소</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {intakeTarget && (
+        <IntakeWarehouseModal record={intakeTarget} state={state} calc={calc} actions={actions} onClose={() => setIntakeTarget(null)} />
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
  * 물자 이동 로그
  * ------------------------------------------------------------- */
 function LogView({ state }) {
@@ -1929,20 +2166,9 @@ function LogView({ state }) {
 /* ---------------------------------------------------------------
  * 관리자 관리
  * ------------------------------------------------------------- */
-function AdminsView({ state, actions, currentAdmin }) {
-  const [name, setName] = useState('');
-  const submit = () => { actions.addAdmin(name); setName(''); };
-
+function AdminsView({ state, currentAdmin }) {
   return (
     <div className="space-y-4">
-      <div className="jamul-card p-4">
-        <h3 className="text-sm font-bold mb-3" style={{ color: 'var(--ink)' }}>관리자 등록</h3>
-        <div className="flex gap-2">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="이름" className="flex-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
-          <button onClick={submit} className="jamul-btn-primary rounded-lg px-4 py-2 text-sm font-medium inline-flex items-center gap-1"><UserPlus size={14} />등록</button>
-        </div>
-        <p className="text-xs mt-2" style={{ color: 'var(--ink-soft)' }}>* 구글 계정 로그인 연동은 추후 확장 기능으로 준비 중입니다.</p>
-      </div>
       <div className="jamul-card p-4">
         <h3 className="text-sm font-bold mb-3" style={{ color: 'var(--ink)' }}>등록된 관리자 ({state.admins.length})</h3>
         <div className="flex flex-wrap gap-2">
@@ -1954,6 +2180,9 @@ function AdminsView({ state, actions, currentAdmin }) {
             </span>
           ))}
         </div>
+        <p className="text-xs mt-3" style={{ color: 'var(--ink-soft)' }}>
+          새 관리자는 로그인 화면의 <b>신규 등록</b> 탭에서 이름과 비밀번호를 정해 직접 등록합니다.
+        </p>
       </div>
     </div>
   );
@@ -1972,24 +2201,6 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const loaded = await loadState();
-        setState(loaded);
-      } catch (e) {
-        console.error('Supabase 데이터를 불러오지 못했습니다:', e);
-        setToast({ msg: '데이터를 불러오지 못했습니다. Supabase 연결 설정을 확인해주세요.', tone: 'danger' });
-      }
-      try {
-        const me = localStorage.getItem(ADMIN_KEY);
-        if (me) setCurrentAdminState(me);
-      } catch (e) { /* 최초 실행: 저장된 관리자 없음 */ }
-      setAdminReady(true);
-      setLoading(false);
-    })();
-  }, []);
 
   const showToast = (msg, tone = 'success') => {
     setToast({ msg, tone });
@@ -2022,19 +2233,68 @@ export default function App() {
     setLoading(false);
   };
 
-  const loginAs = async (name) => {
-    const trimmed = (name || '').trim();
-    if (!trimmed) return;
-    if (!state.admins.some((a) => a.name === trimmed)) {
-      await persist({ ...state, admins: [...state.admins, { id: uid('adm'), name: trimmed }] });
+  const handleSession = async (session) => {
+    const name = session?.user?.user_metadata?.name || null;
+    setCurrentAdminState(name);
+    if (name) {
+      try {
+        const loaded = await loadState();
+        setState(loaded);
+      } catch (e) {
+        console.error('Supabase 데이터를 불러오지 못했습니다:', e);
+        showToast('데이터를 불러오지 못했습니다. Supabase 연결 설정을 확인해주세요.', 'danger');
+      }
+    } else {
+      setState(defaultState());
     }
-    try { localStorage.setItem(ADMIN_KEY, trimmed); } catch (e) { /* ignore */ }
-    setCurrentAdminState(trimmed);
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (mounted) await handleSession(session);
+      if (mounted) { setAdminReady(true); setLoading(false); }
+    })();
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      handleSession(session);
+    });
+    return () => { mounted = false; listener.subscription.unsubscribe(); };
+  }, []);
+
+  const loginAs = async (name, password) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed || !password) return { ok: false, message: '이름과 비밀번호를 입력해주세요.' };
+    const { error } = await supabase.auth.signInWithPassword({ email: nameToEmail(trimmed), password });
+    if (error) return { ok: false, message: '이름 또는 비밀번호가 올바르지 않습니다.' };
+    return { ok: true };
+  };
+
+  const signUpAdmin = async (name, password) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed || !password) return { ok: false, message: '이름과 비밀번호를 입력해주세요.' };
+    if (password.length < 6) return { ok: false, message: '비밀번호는 6자 이상이어야 합니다.' };
+    const { data, error } = await supabase.auth.signUp({
+      email: nameToEmail(trimmed),
+      password,
+      options: { data: { name: trimmed } },
+    });
+    if (error) {
+      const already = /already|registered|exists/i.test(error.message || '');
+      return { ok: false, message: already ? '이미 등록된 이름입니다. 로그인해주세요.' : `등록에 실패했습니다: ${error.message}` };
+    }
+    const userId = data.user?.id;
+    if (userId) {
+      try { await supabase.from('admins').upsert({ id: userId, name: trimmed }); } catch (e) { /* 목록 표시용, 실패해도 로그인은 유지 */ }
+    }
+    if (!data.session) {
+      return { ok: false, message: '등록되었습니다. 관리자에게 이메일 인증(Confirm email) 설정을 꺼달라고 요청해주세요.' };
+    }
+    return { ok: true };
   };
 
   const switchAdmin = async () => {
-    try { localStorage.removeItem(ADMIN_KEY); } catch (e) { /* ignore */ }
-    setCurrentAdminState(null);
+    await supabase.auth.signOut();
   };
 
   const calc = buildCalc(state);
@@ -2128,7 +2388,8 @@ export default function App() {
     deleteItem: async (id) => {
       const stockSum = calc.totalStock(id);
       const heldSum = calc.totalHeld(id);
-      if (stockSum > 0 || heldSum > 0) { showToast('보유 또는 불출 중인 수량이 있어 삭제할 수 없습니다.', 'danger'); return; }
+      const maintSum = calc.maintenanceQty(id);
+      if (stockSum > 0 || heldSum > 0 || maintSum > 0) { showToast('보유·불출·정비입고 중인 수량이 있어 삭제할 수 없습니다.', 'danger'); return; }
       await persist({ ...state, items: state.items.filter((it) => it.id !== id) });
       showToast('품목이 삭제되었습니다.');
     },
@@ -2250,12 +2511,58 @@ export default function App() {
       await persist({ ...state, stock, items, disposals, log });
       showToast('폐기 처리가 완료되었습니다.');
     },
-    addAdmin: async (name) => {
-      const trimmed = (name || '').trim();
-      if (!trimmed) return;
-      if (state.admins.some((a) => a.name === trimmed)) { showToast('이미 등록된 관리자입니다.', 'danger'); return; }
-      await persist({ ...state, admins: [...state.admins, { id: uid('adm'), name: trimmed }] });
-      showToast('관리자가 등록되었습니다.');
+    addMaintenancePending: async ({ itemId, serial, reason }) => {
+      if (!itemId) { showToast('품목을 선택해주세요.', 'danger'); return; }
+      const m = {
+        id: uid('mt'), itemId, itemName: calc.itemName(itemId),
+        serial: (serial || '').trim(), reason: (reason || '').trim(),
+        status: 'pending', warehouseId: '', warehouseName: '',
+        createdDate: nowIso(), intakeDate: null, closedDate: null,
+      };
+      await persist({ ...state, maintenance: [...state.maintenance, m] });
+      showToast('정비입고 대기 목록에 등록되었습니다.');
+    },
+    startMaintenanceIntake: async (id, warehouseId) => {
+      const m = state.maintenance.find((x) => x.id === id);
+      if (!m) return false;
+      if (!warehouseId) { showToast('반출할 창고를 선택해주세요.', 'danger'); return false; }
+      const avail = calc.stockAt(m.itemId, warehouseId);
+      if (avail < 1) { showToast('선택한 창고에 해당 품목 재고가 없습니다.', 'danger'); return false; }
+      const { stock } = consumeFromRows(state.stock, m.itemId, warehouseId, 1);
+      const maintenance = state.maintenance.map((x) => (x.id === id
+        ? { ...x, status: 'in_progress', warehouseId, warehouseName: calc.whName(warehouseId), intakeDate: nowIso() }
+        : x));
+      const log = [...state.log, makeLog({ type: 'maintenanceIn', itemName: m.itemName, qty: 1, warehouseName: calc.whName(warehouseId), detail: `정비입고 반출 (일련번호: ${m.serial || '미기재'})` })];
+      await persist({ ...state, stock, maintenance, log });
+      showToast('정비 입고 처리되었습니다.');
+      return true;
+    },
+    closeMaintenance: async (id, outcome) => {
+      const m = state.maintenance.find((x) => x.id === id);
+      if (!m) return;
+      let stock = state.stock;
+      let log = state.log;
+      const label = outcome === 'completed' ? '정비완료' : '정비입고 취소';
+      if (m.status === 'in_progress') {
+        const idx = stock.findIndex((s) => s.itemId === m.itemId && s.warehouseId === m.warehouseId);
+        stock = [...stock];
+        if (idx >= 0) stock[idx] = { ...stock[idx], qty: stock[idx].qty + 1 };
+        else stock.push({ id: uid('st'), itemId: m.itemId, warehouseId: m.warehouseId, boxId: '', qty: 1 });
+        log = [...log, makeLog({
+          type: outcome === 'completed' ? 'maintenanceDone' : 'maintenanceCancel',
+          itemName: m.itemName, qty: 1, warehouseName: m.warehouseName,
+          detail: `${label} · 창고 반영 (일련번호: ${m.serial || '미기재'})`,
+        })];
+      } else {
+        log = [...log, makeLog({
+          type: outcome === 'completed' ? 'maintenanceDone' : 'maintenanceCancel',
+          itemName: m.itemName, qty: 1, warehouseName: '-',
+          detail: `${label} · 대기 상태에서 처리 (일련번호: ${m.serial || '미기재'})`,
+        })];
+      }
+      const maintenance = state.maintenance.map((x) => (x.id === id ? { ...x, status: outcome, closedDate: nowIso() } : x));
+      await persist({ ...state, stock, maintenance, log });
+      showToast(outcome === 'completed' ? '정비완료 처리되었습니다.' : '정비입고가 취소되었습니다.');
     },
   };
 
@@ -2264,7 +2571,7 @@ export default function App() {
   }
 
   if (!currentAdmin) {
-    return <LoginGate admins={state.admins} onLogin={loginAs} />;
+    return <LoginGate onLogin={loginAs} onSignup={signUpAdmin} />;
   }
 
   return (
@@ -2287,9 +2594,10 @@ export default function App() {
           {activeTab === 'issuance' && <IssuanceView state={state} calc={calc} actions={actions} showToast={showToast} />}
           {activeTab === 'persons' && <PersonsView state={state} calc={calc} actions={actions} showToast={showToast} setConfirmState={setConfirmState} />}
           {activeTab === 'itemsManage' && <ItemsView state={state} calc={calc} actions={actions} setConfirmState={setConfirmState} />}
+          {activeTab === 'maintenance' && <MaintenanceView state={state} calc={calc} actions={actions} setConfirmState={setConfirmState} />}
           {activeTab === 'disposal' && <DisposalView state={state} calc={calc} actions={actions} setConfirmState={setConfirmState} />}
           {activeTab === 'log' && <LogView state={state} />}
-          {activeTab === 'admins' && <AdminsView state={state} actions={actions} currentAdmin={currentAdmin} />}
+          {activeTab === 'admins' && <AdminsView state={state} currentAdmin={currentAdmin} />}
         </main>
       </div>
       <Toast toast={toast} />
