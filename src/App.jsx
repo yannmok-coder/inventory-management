@@ -60,6 +60,7 @@ const TYPE_LABEL = {
   maintenanceIn: '정비 입고',
   maintenanceDone: '정비 완료',
   maintenanceCancel: '정비 입고 취소',
+  issueNew: '신규 재산 불출',
 };
 
 function buildCalc(state) {
@@ -1558,11 +1559,64 @@ function IssueModal({ state, calc, actions, onClose }) {
   );
 }
 
+function NewPropertyIssueModal({ state, calc, actions, onClose }) {
+  const [personId, setPersonId] = useState('');
+  const [itemId, setItemId] = useState('');
+  const [qty, setQty] = useState('');
+  const [reason, setReason] = useState('');
+  const [date, setDate] = useState(todayStr());
+
+  const submit = async () => {
+    const ok = await actions.issueNewProperty({ personId, itemId, qty, reason, date });
+    if (ok) onClose();
+  };
+
+  return (
+    <Modal title="재고 추가 불출 등록" onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--warning-bg)', color: 'var(--warning)' }}>
+          창고 재고를 거치지 않고, 품목의 재산수량을 함께 늘리면서 바로 인원에게 불출합니다. (예: 신규 지급품을 창고 입고 없이 바로 지급하는 경우)
+        </p>
+        <div>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>인원</label>
+          <select value={personId} onChange={(e) => setPersonId(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
+            <option value="">선택</option>
+            {state.persons.map((p) => <option key={p.id} value={p.id}>{p.dept} · {p.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>품목</label>
+          <select value={itemId} onChange={(e) => setItemId(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
+            <option value="">선택</option>
+            {state.items.map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
+          </select>
+        </div>
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>수량</label>
+            <input type="number" value={qty} onChange={(e) => setQty(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          </div>
+          <div className="flex-1">
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>불출일</label>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          </div>
+        </div>
+        <div>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>사유</label>
+          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="예: 신규 지급" className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+        </div>
+        <button onClick={submit} className="jamul-btn-primary w-full rounded-lg py-2.5 text-sm font-medium mt-2">등록</button>
+      </div>
+    </Modal>
+  );
+}
+
 function IssuanceView({ state, calc, actions, showToast }) {
   const [search, setSearch] = useState('');
   const [openDept, setOpenDept] = useState(null);
   const [openPerson, setOpenPerson] = useState(null);
   const [showIssueModal, setShowIssueModal] = useState(false);
+  const [showNewPropIssueModal, setShowNewPropIssueModal] = useState(false);
 
   const deptMap = {};
   state.persons.forEach((p) => { (deptMap[p.dept] = deptMap[p.dept] || []).push(p); });
@@ -1577,7 +1631,16 @@ function IssuanceView({ state, calc, actions, showToast }) {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--ink-soft)' }} />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="소속 또는 이름 검색" className="pl-8 pr-3 py-2 rounded-lg border text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
         </div>
-        <button onClick={() => setShowIssueModal(true)} className="jamul-btn-primary rounded-lg px-4 py-2 text-sm font-medium inline-flex items-center gap-1"><Plus size={14} />새 불출 등록</button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setShowIssueModal(true)} className="jamul-btn-primary rounded-lg px-4 py-2 text-sm font-medium inline-flex items-center gap-1"><Plus size={14} />새 불출 등록</button>
+          <button
+            onClick={() => setShowNewPropIssueModal(true)}
+            className="rounded-lg px-4 py-2 text-sm font-medium inline-flex items-center gap-1 border"
+            style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+          >
+            <Plus size={14} />재고 추가 불출 등록
+          </button>
+        </div>
       </div>
 
       {state.persons.length === 0 && (
@@ -1637,6 +1700,7 @@ function IssuanceView({ state, calc, actions, showToast }) {
       </div>
 
       {showIssueModal && <IssueModal state={state} calc={calc} actions={actions} onClose={() => setShowIssueModal(false)} />}
+      {showNewPropIssueModal && <NewPropertyIssueModal state={state} calc={calc} actions={actions} onClose={() => setShowNewPropIssueModal(false)} />}
     </div>
   );
 }
@@ -2776,6 +2840,20 @@ export default function App() {
       const log = [...state.log, makeLog({ type: 'issue', itemName: calc.itemName(itemId), qty: q, warehouseName: calc.whName(warehouseId), personName: calc.personName(personId), detail: (reason || '').trim() || '-' })];
       await persist({ ...state, stock, holdings, log });
       showToast('불출 처리가 완료되었습니다.');
+      return true;
+    },
+    issueNewProperty: async ({ personId, itemId, qty, reason, date }) => {
+      const q = Number(qty) || 0;
+      if (!personId || !itemId) { showToast('인원과 품목을 선택해주세요.', 'danger'); return false; }
+      if (q <= 0) { showToast('수량을 올바르게 입력해주세요.', 'danger'); return false; }
+      const items = state.items.map((it) => (it.id === itemId ? { ...it, propertyQty: it.propertyQty + q } : it));
+      let holdings = [...state.holdings];
+      const existing = holdings.find((h) => h.itemId === itemId && h.personId === personId);
+      if (existing) holdings = holdings.map((h) => (h.id === existing.id ? { ...h, qty: h.qty + q } : h));
+      else holdings.push({ id: uid('hd'), itemId, personId, qty: q });
+      const log = [...state.log, makeLog({ type: 'issueNew', itemName: calc.itemName(itemId), qty: q, personName: calc.personName(personId), detail: (reason || '').trim() || '재산 신규 취득 후 즉시 불출' })];
+      await persist({ ...state, items, holdings, log });
+      showToast('재산 증가 및 불출 처리가 완료되었습니다.');
       return true;
     },
     addDisposalPending: async ({ itemId, size, qty, reason, warehouseId }) => {
