@@ -28,6 +28,16 @@ const itemTag = (it) => {
   const parts = [it.season, it.part, it.size].filter(Boolean);
   return parts.length ? ` (${parts.join(', ')})` : '';
 };
+const byKoName = (a, b) => (a.name || '').localeCompare(b.name || '', 'ko');
+const SQUAD_ORDER = ['1분대', '2분대', '3분대', '4분대', '본부'];
+const squadRank = (dept) => {
+  const idx = SQUAD_ORDER.indexOf(dept);
+  return idx === -1 ? SQUAD_ORDER.length : idx;
+};
+const bySquad = (a, b) => {
+  const r = squadRank(a) - squadRank(b);
+  return r !== 0 ? r : (a || '').localeCompare(b || '', 'ko');
+};
 const fmtDate = (iso) => {
   if (!iso) return '-';
   const d = new Date(iso);
@@ -822,7 +832,7 @@ function InventoryView({ state, calc, actions }) {
   const [expandedWh, setExpandedWh] = useState(null);
   const [transferItem, setTransferItem] = useState(null);
 
-  const filteredItems = state.items.filter((it) => it.name.toLowerCase().includes(search.toLowerCase()));
+  const filteredItems = state.items.filter((it) => it.name.toLowerCase().includes(search.toLowerCase())).sort(byKoName);
 
   return (
     <div className="space-y-4">
@@ -950,7 +960,9 @@ function InventoryView({ state, calc, actions }) {
           )}
           {state.warehouses.map((wh) => {
             const isOpen = expandedWh === wh.id;
-            const rows = state.stock.filter((s) => s.warehouseId === wh.id && s.qty > 0 && calc.itemName(s.itemId).toLowerCase().includes(search.toLowerCase()));
+            const rows = state.stock
+              .filter((s) => s.warehouseId === wh.id && s.qty > 0 && calc.itemName(s.itemId).toLowerCase().includes(search.toLowerCase()))
+              .sort((a, b) => calc.itemName(a.itemId).localeCompare(calc.itemName(b.itemId), 'ko'));
             const sum = state.stock.filter((s) => s.warehouseId === wh.id).reduce((a, b) => a + b.qty, 0);
             return (
               <div key={wh.id} className="jamul-card overflow-hidden">
@@ -1237,6 +1249,7 @@ function WarehousesView({ state, calc, actions, setConfirmState }) {
                 groupIndex[it.name].itemIds.add(s.itemId);
                 groupIndex[it.name].rows.push(s);
               });
+              itemGroups.sort(byKoName);
               return (
                 <React.Fragment key={w.id}>
                   <tr className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
@@ -1629,9 +1642,10 @@ function IssuanceView({ state, calc, actions, showToast }) {
 
   const deptMap = {};
   state.persons.forEach((p) => { (deptMap[p.dept] = deptMap[p.dept] || []).push(p); });
-  const depts = Object.keys(deptMap).filter((d) =>
-    d.toLowerCase().includes(search.toLowerCase()) || deptMap[d].some((p) => p.name.toLowerCase().includes(search.toLowerCase()))
-  );
+  Object.values(deptMap).forEach((list) => list.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko')));
+  const depts = Object.keys(deptMap)
+    .filter((d) => d.toLowerCase().includes(search.toLowerCase()) || deptMap[d].some((p) => p.name.toLowerCase().includes(search.toLowerCase())))
+    .sort(bySquad);
 
   return (
     <div className="space-y-4">
@@ -1724,6 +1738,7 @@ function PersonsView({ state, calc, actions, showToast, setConfirmState }) {
 
   const submit = () => { actions.addPerson(name, dept); setName(''); setDept(''); };
   const holdingsOf = (personId) => state.holdings.filter((h) => h.personId === personId && h.qty > 0);
+  const sortedPersons = [...state.persons].sort((a, b) => squadRank(a.dept) - squadRank(b.dept) || (a.dept || '').localeCompare(b.dept || '', 'ko') || (a.name || '').localeCompare(b.name || '', 'ko'));
 
   const requestDelete = (p) => {
     const holdings = holdingsOf(p.id);
@@ -1759,7 +1774,7 @@ function PersonsView({ state, calc, actions, showToast, setConfirmState }) {
             {state.persons.length === 0 && (
               <tr><td colSpan={4} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--ink-soft)' }}>등록된 인원이 없습니다.</td></tr>
             )}
-            {state.persons.map((p) => {
+            {sortedPersons.map((p) => {
               const holdings = holdingsOf(p.id);
               const total = holdings.reduce((a, b) => a + b.qty, 0);
               return (
@@ -1932,6 +1947,7 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
     }
     groupIndex[it.name].items.push(it);
   });
+  groups.sort(byKoName);
 
   const renderItemRow = (it, indent) => (
     <tr key={it.id} className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
