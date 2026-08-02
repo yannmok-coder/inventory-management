@@ -1120,10 +1120,19 @@ function WarehouseMapModal({ warehouseId, state, calc, actions, setConfirmState,
                       const boxId = `${shelf.id}#${n}`;
                       const occupants = state.stock.filter((s) => s.boxId === boxId && s.qty > 0);
                       const occupied = occupants.length > 0;
+                      const labelTotals = {};
+                      occupants.forEach((o) => {
+                        const oi = calc.item(o.itemId);
+                        if (!oi) return;
+                        const tag = [oi.season, oi.part].filter(Boolean).join(', ');
+                        const label = tag ? `${oi.name} (${tag})` : oi.name;
+                        labelTotals[label] = (labelTotals[label] || 0) + o.qty;
+                      });
+                      const labelEntries = Object.entries(labelTotals);
                       return (
                         <div
                           key={n}
-                          title={occupied ? occupants.map((o) => `${calc.itemName(o.itemId)} (${fmtNum(o.qty)})`).join(', ') : `${n}번 박스 (비어있음)`}
+                          title={occupied ? labelEntries.map(([label, qty]) => `${label} (${fmtNum(qty)})`).join(', ') : `${n}번 박스 (비어있음)`}
                           className="rounded-md border text-xs flex items-center justify-center text-center p-1.5"
                           style={{
                             borderColor: occupied ? 'var(--accent)' : 'var(--border)',
@@ -1132,7 +1141,7 @@ function WarehouseMapModal({ warehouseId, state, calc, actions, setConfirmState,
                             minHeight: '2.5rem',
                           }}
                         >
-                          {occupied ? occupants.map((o) => calc.itemName(o.itemId)).join(', ') : n}
+                          {occupied ? labelEntries.map(([label]) => label).join(', ') : n}
                         </div>
                       );
                     })}
