@@ -71,6 +71,7 @@ const TYPE_LABEL = {
   maintenanceDone: '정비 완료',
   maintenanceCancel: '정비 입고 취소',
   issueNew: '신규 재산 불출',
+  transferPerson: '인원간 이동',
 };
 
 function buildCalc(state) {
@@ -1462,7 +1463,8 @@ function WarehousesView({ state, calc, actions, setConfirmState }) {
 /* ---------------------------------------------------------------
  * 반납 처리 공용 패널 (불출현황 / 인원삭제 에서 재사용)
  * ------------------------------------------------------------- */
-function HoldingsReturnPanel({ holdings, calc, warehouses, onSubmit, submitLabel }) {
+function HoldingsReturnPanel({ holdings, calc, warehouses, onSubmit, submitLabel, persons, currentPersonId, onTransfer }) {
+  const [mode, setMode] = useState('return'); // 'return' | 'transfer'
   const [checked, setChecked] = useState(() => {
     const m = {}; holdings.forEach((h) => { m[h.id] = true; }); return m;
   });
@@ -1470,22 +1472,49 @@ function HoldingsReturnPanel({ holdings, calc, warehouses, onSubmit, submitLabel
     const m = {}; holdings.forEach((h) => { m[h.id] = h.qty; }); return m;
   });
   const [warehouseId, setWarehouseId] = useState(warehouses[0]?.id || '');
+  const [targetPersonId, setTargetPersonId] = useState('');
 
   if (holdings.length === 0) {
     return <p className="text-xs py-3" style={{ color: 'var(--ink-soft)' }}>현재 보유중인 품목이 없습니다.</p>;
   }
 
+  const buildRows = () => holdings
+    .filter((h) => checked[h.id])
+    .map((h) => ({ holdingId: h.id, itemId: h.itemId, personId: h.personId, qty: Math.min(Number(qtyMap[h.id]) || 0, h.qty) }))
+    .filter((r) => r.qty > 0);
+
   const submit = () => {
-    if (!warehouseId) return;
-    const rows = holdings
-      .filter((h) => checked[h.id])
-      .map((h) => ({ holdingId: h.id, itemId: h.itemId, personId: h.personId, qty: Math.min(Number(qtyMap[h.id]) || 0, h.qty), warehouseId }))
-      .filter((r) => r.qty > 0);
-    onSubmit(rows);
+    if (mode === 'return') {
+      if (!warehouseId) return;
+      onSubmit(buildRows().map((r) => ({ ...r, warehouseId })));
+    } else {
+      if (!targetPersonId) return;
+      onTransfer(buildRows(), targetPersonId);
+    }
   };
+
+  const otherPersons = (persons || []).filter((p) => p.id !== currentPersonId);
 
   return (
     <div>
+      {onTransfer && (
+        <div className="inline-flex rounded-lg border p-0.5 mb-3" style={{ borderColor: 'var(--border)' }}>
+          <button
+            onClick={() => setMode('return')}
+            className="px-3 py-1.5 rounded-md text-xs"
+            style={{ background: mode === 'return' ? 'var(--accent)' : 'transparent', color: mode === 'return' ? '#fff' : 'var(--ink-soft)' }}
+          >
+            창고로 반납
+          </button>
+          <button
+            onClick={() => setMode('transfer')}
+            className="px-3 py-1.5 rounded-md text-xs"
+            style={{ background: mode === 'transfer' ? 'var(--accent)' : 'transparent', color: mode === 'transfer' ? '#fff' : 'var(--ink-soft)' }}
+          >
+            다른 인원에게 이동
+          </button>
+        </div>
+      )}
       <div className="space-y-2 mb-4 max-h-64 overflow-y-auto jamul-scrollbar">
         {holdings.map((h) => {
           const it = calc.item(h.itemId);
@@ -1507,13 +1536,23 @@ function HoldingsReturnPanel({ holdings, calc, warehouses, onSubmit, submitLabel
           );
         })}
       </div>
-      <div className="flex items-center gap-2">
-        <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} className="flex-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
-          <option value="">반납할 창고 선택</option>
-          {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-        </select>
-        <button onClick={submit} className="jamul-btn-primary rounded-lg px-4 py-2 text-sm font-medium whitespace-nowrap">{submitLabel}</button>
-      </div>
+      {mode === 'return' ? (
+        <div className="flex items-center gap-2">
+          <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} className="flex-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
+            <option value="">반납할 창고 선택</option>
+            {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+          <button onClick={submit} className="jamul-btn-primary rounded-lg px-4 py-2 text-sm font-medium whitespace-nowrap">{submitLabel}</button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <select value={targetPersonId} onChange={(e) => setTargetPersonId(e.target.value)} className="flex-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
+            <option value="">이동할 인원 선택</option>
+            {otherPersons.map((p) => <option key={p.id} value={p.id}>{p.dept} · {p.name}</option>)}
+          </select>
+          <button onClick={submit} className="jamul-btn-primary rounded-lg px-4 py-2 text-sm font-medium whitespace-nowrap">이동</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1703,11 +1742,17 @@ function IssuanceView({ state, calc, actions, showToast }) {
                               holdings={holdings}
                               calc={calc}
                               warehouses={state.warehouses}
+                              persons={state.persons}
+                              currentPersonId={p.id}
                               submitLabel="반납 완료"
                               onSubmit={async (rows) => {
                                 if (rows.length === 0) { showToast('반납할 품목을 선택해주세요.', 'danger'); return; }
                                 const rowsWithNames = rows.map((r) => ({ ...r, personName: p.name }));
                                 await actions.returnHoldings(rowsWithNames);
+                              }}
+                              onTransfer={async (rows, targetPersonId) => {
+                                if (rows.length === 0) { showToast('이동할 품목을 선택해주세요.', 'danger'); return; }
+                                await actions.transferHoldings(rows, p.id, targetPersonId);
                               }}
                             />
                           </div>
@@ -2829,6 +2874,23 @@ export default function App() {
       });
       await persist({ ...state, holdings, stock, log });
       showToast('반납 처리가 완료되었습니다.');
+    },
+    transferHoldings: async (rows, fromPersonId, toPersonId) => {
+      if (!rows.length) return;
+      if (!toPersonId || fromPersonId === toPersonId) { showToast('이동할 인원을 선택해주세요.', 'danger'); return; }
+      let holdings = [...state.holdings];
+      let log = [...state.log];
+      const fromName = calc.personName(fromPersonId);
+      const toName = calc.personName(toPersonId);
+      rows.forEach((r) => {
+        holdings = holdings.map((h) => (h.id === r.holdingId ? { ...h, qty: h.qty - r.qty } : h)).filter((h) => h.qty > 0);
+        const existing = holdings.find((h) => h.itemId === r.itemId && h.personId === toPersonId);
+        if (existing) holdings = holdings.map((h) => (h.id === existing.id ? { ...h, qty: h.qty + r.qty } : h));
+        else holdings.push({ id: uid('hd'), itemId: r.itemId, personId: toPersonId, qty: r.qty });
+        log.push(makeLog({ type: 'transferPerson', itemName: calc.itemName(r.itemId), qty: r.qty, personName: `${fromName} → ${toName}`, detail: '인원간 이동' }));
+      });
+      await persist({ ...state, holdings, log });
+      showToast('다른 인원에게 이동 처리되었습니다.');
     },
     returnAndDeletePerson: async (personId, rows) => {
       let holdings = [...state.holdings];
