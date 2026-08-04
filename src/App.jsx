@@ -1478,6 +1478,8 @@ function HoldingsReturnPanel({ holdings, calc, warehouses, onSubmit, submitLabel
     return <p className="text-xs py-3" style={{ color: 'var(--ink-soft)' }}>현재 보유중인 품목이 없습니다.</p>;
   }
 
+  const sortedHoldings = [...holdings].sort((a, b) => (calc.item(a.itemId)?.name || '').localeCompare(calc.item(b.itemId)?.name || '', 'ko'));
+
   const buildRows = () => holdings
     .filter((h) => checked[h.id])
     .map((h) => ({ holdingId: h.id, itemId: h.itemId, personId: h.personId, qty: Math.min(Number(qtyMap[h.id]) || 0, h.qty) }))
@@ -1516,7 +1518,7 @@ function HoldingsReturnPanel({ holdings, calc, warehouses, onSubmit, submitLabel
         </div>
       )}
       <div className="space-y-2 mb-4 max-h-64 overflow-y-auto jamul-scrollbar">
-        {holdings.map((h) => {
+        {sortedHoldings.map((h) => {
           const it = calc.item(h.itemId);
           return (
             <div key={h.id} className="flex items-center gap-2 p-2 rounded-lg border" style={{ borderColor: 'var(--border)' }}>
@@ -1590,7 +1592,7 @@ function IssueModal({ state, calc, actions, onClose }) {
           <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>품목</label>
           <select value={itemId} onChange={(e) => { setItemId(e.target.value); setWarehouseId(''); }} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
             <option value="">선택</option>
-            {state.items.map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
+            {[...state.items].sort(byKoName).map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
           </select>
         </div>
         <div>
@@ -1649,7 +1651,7 @@ function NewPropertyIssueModal({ state, calc, actions, onClose }) {
           <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>품목</label>
           <select value={itemId} onChange={(e) => setItemId(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
             <option value="">선택</option>
-            {state.items.map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
+            {[...state.items].sort(byKoName).map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
           </select>
         </div>
         <div className="flex gap-2">
