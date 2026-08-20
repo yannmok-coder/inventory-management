@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Boxes, Warehouse, ArrowLeftRight, Users, Package,
   Trash2, ClipboardList, ShieldCheck, Plus, X, AlertTriangle,
   CheckCircle2, RefreshCw, Search, ChevronDown, ChevronRight,
-  UserPlus, LogOut, Pencil, Loader2, Menu, LayoutGrid, Scissors, Wrench, KeyRound
+  UserPlus, LogOut, Pencil, Loader2, Menu, LayoutGrid, Scissors, Wrench, KeyRound, Download
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 
@@ -40,6 +40,16 @@ const validateUsername = (username) => {
   return null;
 };
 
+// 비밀번호 규칙: 영문 · 숫자 · 특수문자만. (한글·공백은 사용할 수 없습니다)
+const PASSWORD_PATTERN = /^[A-Za-z0-9!-/:-@[-`{-~]+$/;
+
+const validatePassword = (password) => {
+  if (!password) return '비밀번호를 입력해주세요.';
+  if (password.length < 6) return '비밀번호는 6자 이상이어야 합니다.';
+  if (!PASSWORD_PATTERN.test(password)) return '비밀번호는 영문, 숫자, 특수문자만 사용할 수 있습니다. (한글·공백 불가)';
+  return null;
+};
+
 // 아이디 중복확인. 신규 등록 화면은 로그인 전(anon)이라 admins 테이블을 직접
 // 조회할 수 없어서, security definer 함수(is_username_taken)로 확인합니다.
 // excludeId를 넘기면 그 계정(=본인)은 중복 대상에서 제외합니다.
@@ -64,7 +74,45 @@ const itemTag = (it) => {
   const parts = [it.season, it.part, it.size].filter(Boolean);
   return parts.length ? ` (${parts.join(', ')})` : '';
 };
-const byKoName = (a, b) => (a.name || '').localeCompare(b.name || '', 'ko');
+// 자음·모음 순(가나다) 정렬. 숫자가 섞인 이름·사이즈도 자연스럽게 정렬됩니다.
+const compareKo = (a, b) => (a || '').localeCompare(b || '', 'ko-KR', { numeric: true, sensitivity: 'base' });
+const byKoName = (a, b) => compareKo(a.name, b.name);
+
+// 같은 이름이라도 동계와 하계는 서로 다른 물자이므로 따로 묶습니다.
+const SEASON_ORDER = ['동계', '하계'];
+const seasonRank = (season) => {
+  const idx = SEASON_ORDER.indexOf(season || '');
+  return idx === -1 ? SEASON_ORDER.length : idx;
+};
+const byKoNameSeason = (a, b) => compareKo(a.name, b.name) || seasonRank(a.season) - seasonRank(b.season);
+const bySize = (a, b) => compareKo(a.size, b.size);
+// 품목 선택 목록용: 이름 → 계절 → 사이즈 순
+const byItemOrder = (a, b) => byKoNameSeason(a, b) || bySize(a, b);
+
+const itemGroupKey = (it) => `${it.name}\u0000${it.season || ''}`;
+
+// 품목 배열을 [이름 + 계절] 기준으로 묶어 자음·모음 순으로 돌려줍니다.
+const groupItemsByNameSeason = (items) => {
+  const groups = [];
+  const index = {};
+  items.forEach((it) => {
+    const key = itemGroupKey(it);
+    if (!index[key]) {
+      index[key] = { key, name: it.name, season: it.season || '', items: [] };
+      groups.push(index[key]);
+    }
+    index[key].items.push(it);
+  });
+  groups.forEach((g) => g.items.sort(bySize));
+  groups.sort(byKoNameSeason);
+  return groups;
+};
+
+// 묶음 안의 값이 모두 같으면 그 값을, 서로 다르면 null 을 돌려줍니다.
+const sharedValue = (items, pick) => {
+  const first = pick(items[0]);
+  return items.every((it) => pick(it) === first) ? first : null;
+};
 const SQUAD_ORDER = ['1분대', '2분대', '3분대', '4분대', '본부'];
 const squadRank = (dept) => {
   const idx = SQUAD_ORDER.indexOf(dept);
@@ -132,7 +180,17 @@ function buildCalc(state) {
     if (!shelf) return '위치 미지정';
     return `${shelf.name} · ${boxNo}번 박스`;
   };
-  return { whName, item, itemName, personName, totalStock, totalHeld, stockAt, diff, whStockSum, pendingDisposal, maintenanceQty, boxLabel };
+  // 묶인 품목들의 수량 합계
+  const groupTotals = (items) => (items || []).reduce((acc, it) => ({
+    propertyQty: acc.propertyQty + it.propertyQty,
+    stock: acc.stock + totalStock(it.id),
+    held: acc.held + totalHeld(it.id),
+    pendingDisposal: acc.pendingDisposal + pendingDisposal(it.id),
+    maintenance: acc.maintenance + maintenanceQty(it.id),
+    diff: acc.diff + diff(it),
+  }), { propertyQty: 0, stock: 0, held: 0, pendingDisposal: 0, maintenance: 0, diff: 0 });
+
+  return { whName, item, itemName, personName, totalStock, totalHeld, stockAt, diff, whStockSum, pendingDisposal, maintenanceQty, boxLabel, groupTotals };
 }
 
 function consumeFromRows(stockArr, itemId, warehouseId, qtyNeeded) {
@@ -477,7 +535,9 @@ const NAV_ITEMS = [
   { id: 'account', label: '개인정보', icon: KeyRound },
 ];
 
-function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle, isAdmin }) {
+// 사이드바는 열려 있을 때만 렌더링됩니다. 좁은 화면에서는 화면 위에 겹쳐 뜨고,
+// 넓은 화면에서는 본문 옆에 자리를 차지합니다.
+function Sidebar({ activeTab, setActiveTab, state, calc, onToggle, isAdmin }) {
   const deficitCount = state.items.filter((it) => calc.diff(it) < 0).length;
   const pendingDisposalCount = state.disposals.filter((d) => d.status === 'pending').length;
   const pendingMaintenanceCount = state.maintenance.filter((m) => m.status === 'pending').length;
@@ -491,37 +551,28 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle, is
   };
   const visibleNavItems = NAV_ITEMS.filter((item) => item.id !== 'admins' || isAdmin);
   return (
-    <aside className={`${collapsed ? 'w-16' : 'w-56'} shrink-0 flex flex-col transition-all`} style={{ background: 'var(--sidebar)' }}>
-      <div className={`px-3 py-5 flex items-center border-b ${collapsed ? 'justify-center' : 'justify-between gap-2'}`} style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        {collapsed ? (
-          <button
-            onClick={onToggle}
-            className="w-9 h-9 rounded-lg bg-white flex items-center justify-center shrink-0 overflow-hidden p-0.5 jamul-focus"
-            title="메뉴 펼치기"
-          >
+    <aside
+      className="w-60 shrink-0 flex flex-col fixed inset-y-0 left-0 z-40 md:static md:z-auto"
+      style={{ background: 'var(--sidebar)' }}
+    >
+      <div className="px-3 py-5 flex items-center justify-between gap-2 border-b" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-9 h-9 rounded-lg bg-white flex items-center justify-center shrink-0 overflow-hidden p-0.5">
             <img src={LOGO_DATA_URI} alt="로고" className="w-full h-full object-contain" />
-          </button>
-        ) : (
-          <>
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-9 h-9 rounded-lg bg-white flex items-center justify-center shrink-0 overflow-hidden p-0.5">
-                <img src={LOGO_DATA_URI} alt="로고" className="w-full h-full object-contain" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-bold text-white leading-tight truncate">물자관리시스템</p>
-                <p className="text-xs" style={{ color: 'var(--sidebar-text)' }}>통합 재고 관제</p>
-              </div>
-            </div>
-            <button
-              onClick={onToggle}
-              className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 jamul-focus"
-              style={{ background: 'var(--sidebar-active)' }}
-              title="메뉴 접기"
-            >
-              <Menu size={14} color="#fff" />
-            </button>
-          </>
-        )}
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-white leading-tight truncate">물자관리시스템</p>
+            <p className="text-xs" style={{ color: 'var(--sidebar-text)' }}>통합 재고 관제</p>
+          </div>
+        </div>
+        <button
+          onClick={onToggle}
+          className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 jamul-focus"
+          style={{ background: 'var(--sidebar-active)' }}
+          title="메뉴 닫기"
+        >
+          <X size={15} color="#fff" />
+        </button>
       </div>
       <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto jamul-scrollbar">
         {visibleNavItems.map((item) => {
@@ -532,13 +583,12 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle, is
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              title={collapsed ? item.label : undefined}
-              className={`relative w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors jamul-focus ${collapsed ? 'justify-center' : ''}`}
+              className="relative w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors jamul-focus"
               style={{ background: active ? 'var(--sidebar-active)' : 'transparent', color: active ? '#fff' : 'var(--sidebar-text)' }}
             >
               <Icon size={16} />
-              {!collapsed && <span className="flex-1 text-left">{item.label}</span>}
-              {!collapsed && badge > 0 && (
+              <span className="flex-1 text-left">{item.label}</span>
+              {badge > 0 && (
                 <span
                   className="jamul-mono text-xs px-1.5 py-0.5 rounded-full"
                   style={{ background: (item.id === 'disposal' || item.id === 'maintenance' || item.id === 'admins') ? 'var(--warning)' : 'var(--danger)', color: '#fff' }}
@@ -546,21 +596,13 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle, is
                   {badge}
                 </span>
               )}
-              {collapsed && badge > 0 && (
-                <span
-                  className="absolute top-1 right-1 w-2 h-2 rounded-full"
-                  style={{ background: (item.id === 'disposal' || item.id === 'maintenance' || item.id === 'admins') ? 'var(--warning)' : 'var(--danger)' }}
-                />
-              )}
             </button>
           );
         })}
       </nav>
-      {!collapsed && (
-        <div className="px-4 py-3 text-xs" style={{ color: 'var(--sidebar-text)', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-          품목 {state.items.length} · 창고 {state.warehouses.length} · 인원 {state.persons.length}
-        </div>
-      )}
+      <div className="px-4 py-3 text-xs" style={{ color: 'var(--sidebar-text)', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+        품목 {state.items.length} · 창고 {state.warehouses.length} · 인원 {state.persons.length}
+      </div>
     </aside>
   );
 }
@@ -571,21 +613,32 @@ const TAB_TITLES = {
   account: '개인정보',
 };
 
-function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch, activeUnit, canSwitchUnit, onSwitchUnit }) {
+function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch, activeUnit, canSwitchUnit, onSwitchUnit, menuOpen, onToggleMenu }) {
   const otherUnit = MGMT_UNITS.find((u) => u !== activeUnit) || activeUnit;
   return (
-    <header className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
-      <div>
-        <h2 className="text-base font-bold" style={{ color: 'var(--ink)' }}>{TAB_TITLES[activeTab]}</h2>
-        <p className="text-xs jamul-mono" style={{ color: 'var(--ink-soft)' }}>{todayStr().split('-').join('.')}</p>
+    <header className="flex items-center justify-between gap-3 px-4 md:px-6 py-4 border-b shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
+      <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1">
+        <button
+          onClick={onToggleMenu}
+          className="p-2 rounded-lg border shrink-0 jamul-focus"
+          style={{ borderColor: 'var(--border)' }}
+          title={menuOpen ? '메뉴 닫기' : '메뉴 열기'}
+          aria-label={menuOpen ? '메뉴 닫기' : '메뉴 열기'}
+        >
+          <Menu size={16} />
+        </button>
+        <div className="min-w-0">
+          <h2 className="text-base font-bold truncate" style={{ color: 'var(--ink)' }}>{TAB_TITLES[activeTab]}</h2>
+          <p className="text-xs jamul-mono truncate" style={{ color: 'var(--ink-soft)' }}>{todayStr().split('-').join('.')}</p>
+        </div>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-1.5 md:gap-3 shrink-0">
         {saving && (
-          <span className="text-xs flex items-center gap-1" style={{ color: 'var(--ink-soft)' }}>
-            <Loader2 size={12} className="animate-spin" />저장 중
+          <span className="text-xs flex items-center gap-1 shrink-0" style={{ color: 'var(--ink-soft)' }}>
+            <Loader2 size={12} className="animate-spin" /><span className="hidden sm:inline">저장 중</span>
           </span>
         )}
-        <span className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>관리부대 :</span>
+        <span className="text-xs font-medium hidden sm:inline" style={{ color: 'var(--ink-soft)' }}>관리부대 :</span>
         <button
           onClick={() => canSwitchUnit && onSwitchUnit(otherUnit)}
           disabled={!canSwitchUnit}
@@ -602,13 +655,13 @@ function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch,
         <button onClick={onRefresh} className="p-2 rounded-lg border jamul-focus" style={{ borderColor: 'var(--border)' }} title="새로고침">
           <RefreshCw size={14} />
         </button>
-        <div className="flex items-center gap-2 pl-3 border-l" style={{ borderColor: 'var(--border)' }}>
-          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: 'var(--accent)' }}>
+        <div className="flex items-center gap-1.5 md:gap-2 pl-1.5 md:pl-3 border-l" style={{ borderColor: 'var(--border)' }}>
+          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0" style={{ background: 'var(--accent)' }} title={currentAdmin || ''}>
             {currentAdmin ? currentAdmin[0] : '?'}
           </div>
-          <span className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{currentAdmin}</span>
+          <span className="text-sm font-medium hidden md:inline" style={{ color: 'var(--ink)' }}>{currentAdmin}</span>
           <span
-            className="text-xs px-1.5 py-0.5 rounded-full"
+            className="text-xs px-1.5 py-0.5 rounded-full hidden lg:inline"
             style={{ background: isAdmin ? 'var(--success-bg)' : 'var(--warning-bg)', color: isAdmin ? 'var(--success)' : 'var(--warning)' }}
           >
             {isAdmin ? '관리자' : '일반 사용자'}
@@ -625,6 +678,73 @@ function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch,
 /* ---------------------------------------------------------------
  * 로그인 게이트
  * ------------------------------------------------------------- */
+// 홈 화면 설치(PWA). 크롬 계열은 beforeinstallprompt 이벤트를 잡아 두었다가
+// 버튼을 눌렀을 때 설치창을 띄우고, 이 이벤트가 없는 iOS 사파리는 안내문을 보여줍니다.
+function usePwaInstall() {
+  const [promptEvent, setPromptEvent] = useState(null);
+  const [installed, setInstalled] = useState(false);
+
+  useEffect(() => {
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+    if (standalone) setInstalled(true);
+
+    const onPrompt = (e) => { e.preventDefault(); setPromptEvent(e); };
+    const onInstalled = () => { setInstalled(true); setPromptEvent(null); };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onPrompt);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
+  }, []);
+
+  const install = async () => {
+    if (!promptEvent) return 'unavailable';
+    promptEvent.prompt();
+    const { outcome } = await promptEvent.userChoice;
+    setPromptEvent(null);
+    return outcome;
+  };
+
+  return { canInstall: !!promptEvent, installed, install };
+}
+
+function InstallAppButton() {
+  const { canInstall, installed, install } = usePwaInstall();
+  const [hint, setHint] = useState('');
+
+  if (installed) return null;
+
+  const isIos = /iphone|ipad|ipod/i.test(window.navigator.userAgent);
+
+  const onClick = async () => {
+    if (canInstall) {
+      const outcome = await install();
+      if (outcome === 'dismissed') setHint('설치를 취소했습니다. 다시 누르면 설치할 수 있습니다.');
+      return;
+    }
+    setHint(isIos
+      ? 'Safari 아래쪽 공유 버튼을 누르고 [홈 화면에 추가]를 선택해주세요.'
+      : '브라우저 메뉴(⋮)에서 [앱 설치] 또는 [홈 화면에 추가]를 선택해주세요.');
+  };
+
+  return (
+    <div className="mt-5 pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="w-full rounded-lg border py-2.5 text-sm font-medium flex items-center justify-center gap-2 jamul-focus"
+        style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+      >
+        <Download size={14} />어플 설치하기
+      </button>
+      <p className="text-xs mt-2 text-center" style={{ color: 'var(--ink-soft)' }}>
+        {hint || '홈 화면에 추가하면 앱처럼 바로 열 수 있습니다.'}
+      </p>
+    </div>
+  );
+}
+
 function LoginGate({ onLogin, onSignup, onRecover }) {
   const [mode, setMode] = useState('login'); // 'login' | 'signup' | 'recover'
   const [username, setUsername] = useState('');
@@ -842,7 +962,7 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && mode === 'login') submit(); }}
-              placeholder={mode === 'login' ? '비밀번호 입력' : '6자 이상 입력'}
+              placeholder={mode === 'login' ? '비밀번호 입력' : '영문·숫자·특수문자 6자 이상'}
               className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
               style={{ borderColor: 'var(--border)' }}
             />
@@ -883,6 +1003,8 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
             </button>
           )}
         </div>
+
+        <InstallAppButton />
       </div>
     </div>
   );
@@ -893,7 +1015,7 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
  * ------------------------------------------------------------- */
 function DashboardView({ state, calc, setActiveTab }) {
   const totalProperty = state.items.reduce((a, b) => a + b.propertyQty, 0);
-  const deficitItems = state.items.filter((it) => calc.diff(it) < 0);
+  const deficitItems = state.items.filter((it) => calc.diff(it) < 0).sort(byItemOrder);
   const pendingDisposals = state.disposals.filter((d) => d.status === 'pending');
   const maintenanceActive = state.maintenance.filter((m) => m.status === 'pending' || m.status === 'in_progress');
   const recentLog = [...state.log].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
@@ -1021,10 +1143,96 @@ function InventoryView({ state, calc, actions }) {
   const [view, setView] = useState('item');
   const [search, setSearch] = useState('');
   const [expandedItem, setExpandedItem] = useState(null);
+  const [expandedGroup, setExpandedGroup] = useState(null);
   const [expandedWh, setExpandedWh] = useState(null);
   const [transferItem, setTransferItem] = useState(null);
 
-  const filteredItems = state.items.filter((it) => it.name.toLowerCase().includes(search.toLowerCase())).sort(byKoName);
+  const filteredItems = state.items.filter((it) => it.name.toLowerCase().includes(search.toLowerCase()));
+  // 같은 이름끼리 묶되 동계/하계는 따로 묶습니다. 정렬은 자음·모음 순.
+  const groups = groupItemsByNameSeason(filteredItems);
+
+  // 사이즈 한 종류의 상세 행 (묶음을 펼쳤을 때는 들여쓰기해서 보여줍니다)
+  const renderItemRow = (it, indent) => {
+    const stockSum = calc.totalStock(it.id);
+    const heldSum = calc.totalHeld(it.id);
+    const pendingSum = calc.pendingDisposal(it.id);
+    const diff = calc.diff(it);
+    const isOpen = expandedItem === it.id;
+    const rowsAtWh = state.stock.filter((s) => s.itemId === it.id && s.qty > 0);
+    const holdersOfItem = state.holdings.filter((h) => h.itemId === it.id && h.qty > 0);
+    return (
+      <React.Fragment key={it.id}>
+        <tr
+          className={`jamul-ledger-row cursor-pointer border-b last:border-0 ${diff < 0 ? 'status-deficit' : diff > 0 ? 'status-surplus' : ''}`}
+          style={{ borderColor: 'var(--border)' }}
+          onClick={() => setExpandedItem(isOpen ? null : it.id)}
+        >
+          <td className={`px-4 py-3 ${indent ? 'pl-10' : ''}`}>{isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</td>
+          <td className="px-4 py-3" style={{ color: indent ? 'var(--ink-soft)' : 'var(--ink)', fontWeight: indent ? 400 : 500 }}>{it.name}</td>
+          <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.season || '-'}</td>
+          <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.part || '-'}</td>
+          <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.size || '-'}</td>
+          <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.unit || '-'}</td>
+          <td className="px-4 py-3 text-right jamul-mono">{fmtNum(it.propertyQty)}</td>
+          <td className="px-4 py-3 text-right jamul-mono">{fmtNum(stockSum)}</td>
+          <td className="px-4 py-3 text-right jamul-mono">{fmtNum(heldSum)}</td>
+          <td className="px-4 py-3 text-right jamul-mono" style={{ color: pendingSum > 0 ? 'var(--warning)' : 'var(--ink-soft)' }}>{fmtNum(pendingSum)}</td>
+          <td className="px-4 py-3 text-right"><DiffBadge value={diff} /></td>
+        </tr>
+        {isOpen && (
+          <tr>
+            <td colSpan={11} className="px-4 pb-4 pt-0" style={{ background: '#FAFBFC' }}>
+              <div className="pl-8 pt-2 grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <p className="text-xs font-medium mb-2" style={{ color: 'var(--ink-soft)' }}>창고별 보유 현황</p>
+                  {rowsAtWh.length === 0 ? (
+                    <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>보관 중인 창고가 없습니다.</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {rowsAtWh.map((s) => (
+                        <div key={s.id} className="flex items-center justify-between text-xs py-1">
+                          <div>
+                            <span style={{ color: 'var(--ink)' }}>{calc.whName(s.warehouseId)}</span>
+                            <p style={{ color: 'var(--ink-soft)' }}>{calc.boxLabel(s.warehouseId, s.boxId)}</p>
+                          </div>
+                          <span className="jamul-mono" style={{ color: 'var(--ink-soft)' }}>{fmtNum(s.qty)}{it.unit}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setTransferItem(it.id); }}
+                    className="mt-3 text-xs px-3 py-1.5 rounded-lg border inline-flex items-center gap-1"
+                    style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
+                  >
+                    <ArrowLeftRight size={12} />창고간 이동
+                  </button>
+                </div>
+                <div>
+                  <p className="text-xs font-medium mb-2" style={{ color: 'var(--ink-soft)' }}>불출 인원 현황 (보유중)</p>
+                  {holdersOfItem.length === 0 ? (
+                    <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>현재 불출되어 보유중인 인원이 없습니다.</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {holdersOfItem.map((h) => {
+                        const pr = state.persons.find((x) => x.id === h.personId);
+                        return (
+                          <div key={h.id} className="flex items-center justify-between text-xs py-1">
+                            <span style={{ color: 'var(--ink)' }}>{pr ? `${pr.dept} · ${pr.name}` : '(삭제된 인원)'}</span>
+                            <span className="jamul-mono" style={{ color: 'var(--ink-soft)' }}>{fmtNum(h.qty)}{it.unit}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </td>
+          </tr>
+        )}
+      </React.Fragment>
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -1058,87 +1266,36 @@ function InventoryView({ state, calc, actions }) {
               </tr>
             </thead>
             <tbody>
-              {filteredItems.length === 0 && (
+              {groups.length === 0 && (
                 <tr><td colSpan={11} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--ink-soft)' }}>등록된 품목이 없습니다.</td></tr>
               )}
-              {filteredItems.map((it) => {
-                const stockSum = calc.totalStock(it.id);
-                const heldSum = calc.totalHeld(it.id);
-                const pendingSum = calc.pendingDisposal(it.id);
-                const diff = calc.diff(it);
-                const isOpen = expandedItem === it.id;
-                const rowsAtWh = state.stock.filter((s) => s.itemId === it.id && s.qty > 0);
-                const holdersOfItem = state.holdings.filter((h) => h.itemId === it.id && h.qty > 0);
+              {groups.map((g) => {
+                // 사이즈가 하나뿐이면 묶어봐야 의미가 없으니 그냥 한 줄로 보여줍니다.
+                if (g.items.length === 1) return renderItemRow(g.items[0], false);
+                const totals = calc.groupTotals(g.items);
+                const isGroupOpen = expandedGroup === g.key;
+                const onePart = sharedValue(g.items, (x) => x.part || '');
+                const oneUnit = sharedValue(g.items, (x) => x.unit || '');
                 return (
-                  <React.Fragment key={it.id}>
+                  <React.Fragment key={g.key}>
                     <tr
-                      className={`jamul-ledger-row cursor-pointer border-b last:border-0 ${diff < 0 ? 'status-deficit' : diff > 0 ? 'status-surplus' : ''}`}
-                      style={{ borderColor: 'var(--border)' }}
-                      onClick={() => setExpandedItem(isOpen ? null : it.id)}
+                      className={`jamul-ledger-row cursor-pointer border-b last:border-0 ${totals.diff < 0 ? 'status-deficit' : totals.diff > 0 ? 'status-surplus' : ''}`}
+                      style={{ borderColor: 'var(--border)', background: '#FAFBFC' }}
+                      onClick={() => setExpandedGroup(isGroupOpen ? null : g.key)}
                     >
-                      <td className="px-4 py-3">{isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</td>
-                      <td className="px-4 py-3 font-medium" style={{ color: 'var(--ink)' }}>{it.name}</td>
-                      <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.season || '-'}</td>
-                      <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.part || '-'}</td>
-                      <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.size || '-'}</td>
-                      <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{it.unit || '-'}</td>
-                      <td className="px-4 py-3 text-right jamul-mono">{fmtNum(it.propertyQty)}</td>
-                      <td className="px-4 py-3 text-right jamul-mono">{fmtNum(stockSum)}</td>
-                      <td className="px-4 py-3 text-right jamul-mono">{fmtNum(heldSum)}</td>
-                      <td className="px-4 py-3 text-right jamul-mono" style={{ color: pendingSum > 0 ? 'var(--warning)' : 'var(--ink-soft)' }}>{fmtNum(pendingSum)}</td>
-                      <td className="px-4 py-3 text-right"><DiffBadge value={diff} /></td>
+                      <td className="px-4 py-3">{isGroupOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</td>
+                      <td className="px-4 py-3 font-semibold" style={{ color: 'var(--ink)' }}>{g.name}</td>
+                      <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{g.season || '-'}</td>
+                      <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{onePart || '—'}</td>
+                      <td className="px-4 py-3 text-xs" style={{ color: 'var(--ink-soft)' }}>{g.items.length}종 사이즈</td>
+                      <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{oneUnit || '—'}</td>
+                      <td className="px-4 py-3 text-right jamul-mono font-semibold">{fmtNum(totals.propertyQty)}</td>
+                      <td className="px-4 py-3 text-right jamul-mono font-semibold">{fmtNum(totals.stock)}</td>
+                      <td className="px-4 py-3 text-right jamul-mono font-semibold">{fmtNum(totals.held)}</td>
+                      <td className="px-4 py-3 text-right jamul-mono font-semibold" style={{ color: totals.pendingDisposal > 0 ? 'var(--warning)' : 'var(--ink-soft)' }}>{fmtNum(totals.pendingDisposal)}</td>
+                      <td className="px-4 py-3 text-right"><DiffBadge value={totals.diff} /></td>
                     </tr>
-                    {isOpen && (
-                      <tr>
-                        <td colSpan={11} className="px-4 pb-4 pt-0" style={{ background: '#FAFBFC' }}>
-                          <div className="pl-8 pt-2 grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div>
-                              <p className="text-xs font-medium mb-2" style={{ color: 'var(--ink-soft)' }}>창고별 보유 현황</p>
-                              {rowsAtWh.length === 0 ? (
-                                <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>보관 중인 창고가 없습니다.</p>
-                              ) : (
-                                <div className="space-y-1.5">
-                                  {rowsAtWh.map((s) => (
-                                    <div key={s.id} className="flex items-center justify-between text-xs py-1">
-                                      <div>
-                                        <span style={{ color: 'var(--ink)' }}>{calc.whName(s.warehouseId)}</span>
-                                        <p style={{ color: 'var(--ink-soft)' }}>{calc.boxLabel(s.warehouseId, s.boxId)}</p>
-                                      </div>
-                                      <span className="jamul-mono" style={{ color: 'var(--ink-soft)' }}>{fmtNum(s.qty)}{it.unit}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              <button
-                                onClick={(e) => { e.stopPropagation(); setTransferItem(it.id); }}
-                                className="mt-3 text-xs px-3 py-1.5 rounded-lg border inline-flex items-center gap-1"
-                                style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
-                              >
-                                <ArrowLeftRight size={12} />창고간 이동
-                              </button>
-                            </div>
-                            <div>
-                              <p className="text-xs font-medium mb-2" style={{ color: 'var(--ink-soft)' }}>불출 인원 현황 (보유중)</p>
-                              {holdersOfItem.length === 0 ? (
-                                <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>현재 불출되어 보유중인 인원이 없습니다.</p>
-                              ) : (
-                                <div className="space-y-1.5">
-                                  {holdersOfItem.map((h) => {
-                                    const p = state.persons.find((x) => x.id === h.personId);
-                                    return (
-                                      <div key={h.id} className="flex items-center justify-between text-xs py-1">
-                                        <span style={{ color: 'var(--ink)' }}>{p ? `${p.dept} · ${p.name}` : '(삭제된 인원)'}</span>
-                                        <span className="jamul-mono" style={{ color: 'var(--ink-soft)' }}>{fmtNum(h.qty)}{it.unit}</span>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
+                    {isGroupOpen && g.items.map((it) => renderItemRow(it, true))}
                   </React.Fragment>
                 );
               })}
@@ -1434,14 +1591,16 @@ function WarehousesView({ state, calc, actions, setConfirmState }) {
               items.forEach((s) => {
                 const it = calc.item(s.itemId);
                 if (!it) return;
-                if (!groupIndex[it.name]) {
-                  groupIndex[it.name] = { name: it.name, itemIds: new Set(), rows: [] };
-                  itemGroups.push(groupIndex[it.name]);
+                // 동계/하계는 서로 다른 물자라 따로 묶습니다.
+                const key = itemGroupKey(it);
+                if (!groupIndex[key]) {
+                  groupIndex[key] = { key, name: it.name, season: it.season || '', itemIds: new Set(), rows: [] };
+                  itemGroups.push(groupIndex[key]);
                 }
-                groupIndex[it.name].itemIds.add(s.itemId);
-                groupIndex[it.name].rows.push(s);
+                groupIndex[key].itemIds.add(s.itemId);
+                groupIndex[key].rows.push(s);
               });
-              itemGroups.sort(byKoName);
+              itemGroups.sort(byKoNameSeason);
               return (
                 <React.Fragment key={w.id}>
                   <tr className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
@@ -1498,11 +1657,11 @@ function WarehousesView({ state, calc, actions, setConfirmState }) {
                             <div className="space-y-1.5">
                               {itemGroups.map((grp) => {
                                 const multi = grp.itemIds.size > 1;
-                                const groupKey = `${w.id}:${grp.name}`;
+                                const groupKey = `${w.id}:${grp.key}`;
                                 const isGroupOpen = expandedItemGroup === groupKey;
                                 const rowsToShow = multi ? (isGroupOpen ? grp.rows : []) : grp.rows;
                                 return (
-                                  <div key={grp.name}>
+                                  <div key={grp.key}>
                                     {multi && (
                                       <button
                                         onClick={() => setExpandedItemGroup(isGroupOpen ? null : groupKey)}
@@ -1511,7 +1670,9 @@ function WarehousesView({ state, calc, actions, setConfirmState }) {
                                         <span className="inline-flex items-center gap-1.5 text-sm font-medium" style={{ color: 'var(--ink)' }}>
                                           {isGroupOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                                           {grp.name}
-                                          <span className="text-xs font-normal" style={{ color: 'var(--ink-soft)' }}>({grp.itemIds.size}종 사이즈)</span>
+                                          <span className="text-xs font-normal" style={{ color: 'var(--ink-soft)' }}>
+                                            {grp.season ? `${grp.season} · ` : ''}{grp.itemIds.size}종 사이즈
+                                          </span>
                                         </span>
                                         <span className="jamul-mono text-xs" style={{ color: 'var(--ink-soft)' }}>
                                           {fmtNum(grp.rows.reduce((a, b) => a + b.qty, 0))}
@@ -1669,7 +1830,7 @@ function HoldingsReturnPanel({ holdings, calc, warehouses, onSubmit, submitLabel
     return <p className="text-xs py-3" style={{ color: 'var(--ink-soft)' }}>현재 보유중인 품목이 없습니다.</p>;
   }
 
-  const sortedHoldings = [...holdings].sort((a, b) => (calc.item(a.itemId)?.name || '').localeCompare(calc.item(b.itemId)?.name || '', 'ko'));
+  const sortedHoldings = [...holdings].sort((a, b) => byItemOrder(calc.item(a.itemId) || {}, calc.item(b.itemId) || {}));
 
   const buildRows = () => holdings
     .filter((h) => checked[h.id])
@@ -1783,7 +1944,7 @@ function IssueModal({ state, calc, actions, onClose }) {
           <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>품목</label>
           <select value={itemId} onChange={(e) => { setItemId(e.target.value); setWarehouseId(''); }} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
             <option value="">선택</option>
-            {[...state.items].sort(byKoName).map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
+            {[...state.items].sort(byItemOrder).map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
           </select>
         </div>
         <div>
@@ -1842,7 +2003,7 @@ function NewPropertyIssueModal({ state, calc, actions, onClose }) {
           <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>품목</label>
           <select value={itemId} onChange={(e) => setItemId(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
             <option value="">선택</option>
-            {[...state.items].sort(byKoName).map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
+            {[...state.items].sort(byItemOrder).map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
           </select>
         </div>
         <div className="flex gap-2">
@@ -1865,12 +2026,208 @@ function NewPropertyIssueModal({ state, calc, actions, onClose }) {
   );
 }
 
+// 새 불출 등록 / 재고 추가 불출 등록을 눌렀을 때 먼저 방식을 고르는 창
+function IssueModeModal({ title, onPick, onClose }) {
+  const options = [
+    { mode: 'single', label: '개인불출', desc: '한 명에게 품목을 불출합니다.', icon: UserPlus },
+    { mode: 'bulk', label: '일괄불출', desc: '품목 하나를 여러 인원에게 한 번에 불출합니다.', icon: Users },
+  ];
+  return (
+    <Modal title={title} onClose={onClose}>
+      <div className="space-y-2">
+        {options.map((o) => {
+          const Icon = o.icon;
+          return (
+            <button
+              key={o.mode}
+              onClick={() => onPick(o.mode)}
+              className="w-full flex items-center gap-3 rounded-lg border px-4 py-3 text-left jamul-focus"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <span className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--accent)' }}>
+                <Icon size={16} color="#fff" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium" style={{ color: 'var(--ink)' }}>{o.label}</span>
+                <span className="block text-xs" style={{ color: 'var(--ink-soft)' }}>{o.desc}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
+// 일괄불출: 품목을 먼저 고르고, 여러 인원을 선택해 같은 품목을 한 번에 지급합니다.
+// mode 'stock' = 창고 재고에서 불출, 'newProp' = 재산수량을 늘리며 바로 불출.
+function BulkIssueModal({ state, calc, actions, mode, onClose }) {
+  const fromStock = mode === 'stock';
+  const [itemId, setItemId] = useState('');
+  const [warehouseId, setWarehouseId] = useState('');
+  const [qtyPerPerson, setQtyPerPerson] = useState('1');
+  const [personIds, setPersonIds] = useState([]);
+  const [search, setSearch] = useState('');
+  const [reason, setReason] = useState('');
+  const [date, setDate] = useState(todayStr());
+  const [submitting, setSubmitting] = useState(false);
+
+  const warehouseOptions = fromStock && itemId ? warehousesWithStock(state, itemId) : [];
+  const avail = fromStock && itemId && warehouseId ? calc.stockAt(itemId, warehouseId) : 0;
+
+  const sortedPersons = [...state.persons].sort((a, b) => bySquad(a.dept, b.dept) || compareKo(a.name, b.name));
+  const keyword = search.trim().toLowerCase();
+  const visiblePersons = keyword
+    ? sortedPersons.filter((pp) => pp.name.toLowerCase().includes(keyword) || (pp.dept || '').toLowerCase().includes(keyword))
+    : sortedPersons;
+
+  const selected = new Set(personIds);
+  const perPerson = Number(qtyPerPerson) || 0;
+  const totalQty = perPerson * personIds.length;
+  const shortage = fromStock && warehouseId && totalQty > avail;
+
+  const togglePerson = (id) => {
+    setPersonIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+  const allVisibleSelected = visiblePersons.length > 0 && visiblePersons.every((pp) => selected.has(pp.id));
+  const toggleAllVisible = () => {
+    if (allVisibleSelected) {
+      const ids = new Set(visiblePersons.map((pp) => pp.id));
+      setPersonIds((prev) => prev.filter((x) => !ids.has(x)));
+    } else {
+      setPersonIds((prev) => Array.from(new Set([...prev, ...visiblePersons.map((pp) => pp.id)])));
+    }
+  };
+
+  const submit = async () => {
+    setSubmitting(true);
+    const payload = { personIds, itemId, qtyPerPerson: perPerson, reason, date };
+    const ok = fromStock
+      ? await actions.issueItemBulk({ ...payload, warehouseId })
+      : await actions.issueNewPropertyBulk(payload);
+    setSubmitting(false);
+    if (ok) onClose();
+  };
+
+  return (
+    <Modal title={fromStock ? '일괄불출 · 새 불출 등록' : '일괄불출 · 재고 추가 불출 등록'} onClose={onClose} wide>
+      <div className="space-y-3">
+        {!fromStock && (
+          <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--warning-bg)', color: 'var(--warning)' }}>
+            창고 재고를 거치지 않고, 품목의 재산수량을 함께 늘리면서 바로 인원에게 불출합니다.
+          </p>
+        )}
+
+        <div>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>① 품목</label>
+          <select
+            value={itemId}
+            onChange={(e) => { setItemId(e.target.value); setWarehouseId(''); }}
+            className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
+            style={{ borderColor: 'var(--border)' }}
+          >
+            <option value="">선택</option>
+            {[...state.items].sort(byItemOrder).map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
+          </select>
+        </div>
+
+        {fromStock && (
+          <div>
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>불출할 창고</label>
+            <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
+              <option value="">선택</option>
+              {warehouseOptions.map((s2) => <option key={s2.warehouseId} value={s2.warehouseId}>{calc.whName(s2.warehouseId)} (보유 {fmtNum(s2.qty)})</option>)}
+            </select>
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>1인당 수량</label>
+            <input type="number" min="1" value={qtyPerPerson} onChange={(e) => setQtyPerPerson(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          </div>
+          <div className="flex-1">
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>불출일</label>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          </div>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>② 인원 선택 ({personIds.length}명)</label>
+            <button type="button" onClick={toggleAllVisible} className="text-xs" style={{ color: 'var(--accent)' }}>
+              {allVisibleSelected ? '전체 해제' : '전체 선택'}
+            </button>
+          </div>
+          <div className="relative mt-1">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--ink-soft)' }} />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="소속 또는 이름 검색" className="w-full pl-8 pr-3 py-2 rounded-lg border text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          </div>
+          {/* 5명 정도가 보이고, 나머지는 스크롤해서 볼 수 있는 높이 */}
+          <div className="mt-1 border rounded-lg overflow-y-auto jamul-scrollbar" style={{ borderColor: 'var(--border)', maxHeight: '220px' }}>
+            {visiblePersons.length === 0 ? (
+              <p className="text-xs px-3 py-6 text-center" style={{ color: 'var(--ink-soft)' }}>표시할 인원이 없습니다.</p>
+            ) : visiblePersons.map((pp) => {
+              const held = state.holdings.filter((h) => h.personId === pp.id).reduce((a, b) => a + b.qty, 0);
+              const on = selected.has(pp.id);
+              return (
+                <label
+                  key={pp.id}
+                  className="flex items-center gap-2 px-3 py-2 border-b last:border-0 cursor-pointer"
+                  style={{ borderColor: 'var(--border)', background: on ? 'var(--success-bg)' : 'transparent' }}
+                >
+                  <input type="checkbox" checked={on} onChange={() => togglePerson(pp.id)} className="shrink-0" />
+                  <span className="text-sm flex-1 min-w-0 truncate" style={{ color: 'var(--ink)' }}>
+                    <span style={{ color: 'var(--ink-soft)' }}>{pp.dept}</span> · {pp.name}
+                  </span>
+                  <span className="jamul-mono text-xs shrink-0" style={{ color: 'var(--ink-soft)' }}>보유 {fmtNum(held)}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>사유</label>
+          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={fromStock ? '예: 임무 수행용' : '예: 신규 지급'} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+        </div>
+
+        <div className="text-xs px-3 py-2 rounded-lg" style={{ background: shortage ? 'var(--danger-bg)' : 'var(--bg)', color: shortage ? 'var(--danger)' : 'var(--ink-soft)' }}>
+          선택 {personIds.length}명 × {fmtNum(perPerson)} = <span className="jamul-mono font-semibold">총 {fmtNum(totalQty)}</span>
+          {fromStock && warehouseId && ` (창고 보유 ${fmtNum(avail)})`}
+          {shortage && ' — 보유수량을 초과합니다.'}
+        </div>
+
+        <button
+          onClick={submit}
+          disabled={submitting || shortage || personIds.length === 0}
+          className="jamul-btn-primary w-full rounded-lg py-2.5 text-sm font-medium mt-1"
+          style={{ opacity: submitting || shortage || personIds.length === 0 ? 0.5 : 1 }}
+        >
+          {submitting ? '처리 중...' : `${personIds.length}명에게 불출 등록`}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 function IssuanceView({ state, calc, actions, showToast }) {
   const [search, setSearch] = useState('');
   const [openDept, setOpenDept] = useState(null);
   const [openPerson, setOpenPerson] = useState(null);
+  // 'stock' = 새 불출 등록, 'newProp' = 재고 추가 불출 등록
+  const [modeChooser, setModeChooser] = useState(null);
   const [showIssueModal, setShowIssueModal] = useState(false);
   const [showNewPropIssueModal, setShowNewPropIssueModal] = useState(false);
+  const [bulkMode, setBulkMode] = useState(null);
+
+  const pickIssueMode = (pick) => {
+    const source = modeChooser;
+    setModeChooser(null);
+    if (pick === 'bulk') { setBulkMode(source); return; }
+    if (source === 'stock') setShowIssueModal(true);
+    else setShowNewPropIssueModal(true);
+  };
 
   const deptMap = {};
   state.persons.forEach((p) => { (deptMap[p.dept] = deptMap[p.dept] || []).push(p); });
@@ -1887,9 +2244,9 @@ function IssuanceView({ state, calc, actions, showToast }) {
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="소속 또는 이름 검색" className="pl-8 pr-3 py-2 rounded-lg border text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => setShowIssueModal(true)} className="jamul-btn-primary rounded-lg px-4 py-2 text-sm font-medium inline-flex items-center gap-1"><Plus size={14} />새 불출 등록</button>
+          <button onClick={() => setModeChooser('stock')} className="jamul-btn-primary rounded-lg px-4 py-2 text-sm font-medium inline-flex items-center gap-1"><Plus size={14} />새 불출 등록</button>
           <button
-            onClick={() => setShowNewPropIssueModal(true)}
+            onClick={() => setModeChooser('newProp')}
             className="rounded-lg px-4 py-2 text-sm font-medium inline-flex items-center gap-1 border"
             style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
           >
@@ -1960,8 +2317,16 @@ function IssuanceView({ state, calc, actions, showToast }) {
         })}
       </div>
 
+      {modeChooser && (
+        <IssueModeModal
+          title={modeChooser === 'stock' ? '새 불출 등록' : '재고 추가 불출 등록'}
+          onPick={pickIssueMode}
+          onClose={() => setModeChooser(null)}
+        />
+      )}
       {showIssueModal && <IssueModal state={state} calc={calc} actions={actions} onClose={() => setShowIssueModal(false)} />}
       {showNewPropIssueModal && <NewPropertyIssueModal state={state} calc={calc} actions={actions} onClose={() => setShowNewPropIssueModal(false)} />}
+      {bulkMode && <BulkIssueModal state={state} calc={calc} actions={actions} mode={bulkMode} onClose={() => setBulkMode(null)} />}
     </div>
   );
 }
@@ -2197,16 +2562,8 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
     (partFilter === 'all' || it.part === partFilter)
   );
 
-  const groups = [];
-  const groupIndex = {};
-  filteredItems.forEach((it) => {
-    if (!groupIndex[it.name]) {
-      groupIndex[it.name] = { name: it.name, items: [] };
-      groups.push(groupIndex[it.name]);
-    }
-    groupIndex[it.name].items.push(it);
-  });
-  groups.sort(byKoName);
+  // 같은 이름끼리 묶되 동계/하계는 따로 묶습니다. 정렬은 자음·모음 순.
+  const groups = groupItemsByNameSeason(filteredItems);
 
   const renderItemRow = (it, indent) => (
     <tr key={it.id} className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
@@ -2277,30 +2634,30 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
               if (g.items.length === 1) {
                 return renderItemRow(g.items[0], false);
               }
-              const isOpen = expandedGroup === g.name;
-              const totalProperty = g.items.reduce((a, b) => a + b.propertyQty, 0);
-              const totalMaint = g.items.reduce((a, b) => a + calc.maintenanceQty(b.id), 0);
+              const isOpen = expandedGroup === g.key;
+              const totals = calc.groupTotals(g.items);
+              const onePart = sharedValue(g.items, (x) => x.part || '');
+              const oneUnit = sharedValue(g.items, (x) => x.unit || '');
               return (
-                <React.Fragment key={g.name}>
+                <React.Fragment key={g.key}>
                   <tr
                     className="cursor-pointer border-b last:border-0"
                     style={{ borderColor: 'var(--border)', background: '#FAFBFC' }}
-                    onClick={() => setExpandedGroup(isOpen ? null : g.name)}
+                    onClick={() => setExpandedGroup(isOpen ? null : g.key)}
                   >
                     <td className="px-4 py-3 font-semibold">
                       <span className="inline-flex items-center gap-1.5" style={{ color: 'var(--ink)' }}>
                         {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                         {g.name}
-                        <span className="text-xs font-normal" style={{ color: 'var(--ink-soft)' }}>({g.items.length}종 사이즈)</span>
                       </span>
                     </td>
-                    <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>—</td>
-                    <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>—</td>
-                    <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>—</td>
-                    <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>—</td>
-                    <td className="px-4 py-3 text-right jamul-mono font-semibold">{fmtNum(totalProperty)}</td>
-                    <td className="px-4 py-3 text-right jamul-mono" style={{ color: totalMaint > 0 ? 'var(--warning)' : 'var(--ink-soft)' }}>{fmtNum(totalMaint)}</td>
-                    <td className="px-4 py-3 text-right" style={{ color: 'var(--ink-soft)' }}>—</td>
+                    <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{g.season || '-'}</td>
+                    <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{onePart || '—'}</td>
+                    <td className="px-4 py-3 text-xs" style={{ color: 'var(--ink-soft)' }}>{g.items.length}종 사이즈</td>
+                    <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{oneUnit || '—'}</td>
+                    <td className="px-4 py-3 text-right jamul-mono font-semibold">{fmtNum(totals.propertyQty)}</td>
+                    <td className="px-4 py-3 text-right jamul-mono font-semibold" style={{ color: totals.maintenance > 0 ? 'var(--warning)' : 'var(--ink-soft)' }}>{fmtNum(totals.maintenance)}</td>
+                    <td className="px-4 py-3 text-right"><DiffBadge value={totals.diff} /></td>
                     <td className="px-4 py-3 text-right" style={{ color: 'var(--ink-soft)' }}>—</td>
                   </tr>
                   {isOpen && g.items.map((it) => renderItemRow(it, true))}
@@ -2327,7 +2684,8 @@ function DisposalView({ state, calc, actions, setConfirmState }) {
   const [reason, setReason] = useState('');
 
   const selectedItem = calc.item(itemId);
-  const pending = state.disposals.filter((d) => d.status === 'pending');
+  const pending = state.disposals.filter((d) => d.status === 'pending')
+    .sort((a, b) => byItemOrder(calc.item(a.itemId) || { name: a.itemName, size: a.size }, calc.item(b.itemId) || { name: b.itemName, size: b.size }));
   const completed = state.disposals.filter((d) => d.status === 'completed').sort((a, b) => new Date(b.completedDate) - new Date(a.completedDate));
 
   const submit = () => {
@@ -2342,7 +2700,7 @@ function DisposalView({ state, calc, actions, setConfirmState }) {
         <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
           <select value={itemId} onChange={(e) => { setItemId(e.target.value); setWarehouseId(''); }} className="border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
             <option value="">품목 선택</option>
-            {state.items.map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
+            {[...state.items].sort(byItemOrder).map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
           </select>
           <input value={selectedItem?.size || ''} disabled placeholder="사이즈" className="border rounded-lg px-3 py-2 text-sm bg-gray-50" style={{ borderColor: 'var(--border)', color: 'var(--ink-soft)' }} />
           <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} className="border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
@@ -2470,8 +2828,9 @@ function MaintenanceView({ state, calc, actions, setConfirmState }) {
   const [reason, setReason] = useState('');
   const [intakeTarget, setIntakeTarget] = useState(null);
 
-  const pending = state.maintenance.filter((m) => m.status === 'pending');
-  const inProgress = state.maintenance.filter((m) => m.status === 'in_progress');
+  const byRecordItem = (a, b) => byItemOrder(calc.item(a.itemId) || { name: a.itemName }, calc.item(b.itemId) || { name: b.itemName });
+  const pending = state.maintenance.filter((m) => m.status === 'pending').sort(byRecordItem);
+  const inProgress = state.maintenance.filter((m) => m.status === 'in_progress').sort(byRecordItem);
 
   const submit = () => {
     actions.addMaintenancePending({ itemId, serial, reason });
@@ -2500,7 +2859,7 @@ function MaintenanceView({ state, calc, actions, setConfirmState }) {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
           <select value={itemId} onChange={(e) => setItemId(e.target.value)} className="border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
             <option value="">품목 선택</option>
-            {state.items.map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
+            {[...state.items].sort(byItemOrder).map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
           </select>
           <input value={serial} onChange={(e) => setSerial(e.target.value)} placeholder="일련번호" className="border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
           <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="사유" className="border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
@@ -2997,7 +3356,7 @@ function MyAccountView({ currentAdmin, currentUserId, isAdmin, me, onChangePassw
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="6자 이상 입력"
+              placeholder="영문·숫자·특수문자 6자 이상"
               className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
               style={{ borderColor: 'var(--border)' }}
             />
@@ -3049,7 +3408,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [toast, setToast] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  // 모바일에서는 기본으로 접어두고, 넓은 화면에서는 펼쳐둡니다.
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768);
 
   const showToast = (msg, tone = 'success') => {
     setToast({ msg, tone });
@@ -3176,7 +3536,8 @@ export default function App() {
     const usernameError = validateUsername(trimmedUsername);
     if (usernameError) return { ok: false, message: usernameError };
     if (!MGMT_UNITS.includes(mgmtUnit)) return { ok: false, message: '등록할 제대를 선택해주세요.' };
-    if (password.length < 6) return { ok: false, message: '비밀번호는 6자 이상이어야 합니다.' };
+    const passwordError = validatePassword(password);
+    if (passwordError) return { ok: false, message: passwordError };
     if (!trimmedMilId || !birthDate) return { ok: false, message: '군번과 생년월일을 입력해주세요.' };
     // 로그인 전에는 state.admins 가 비어 있어서 클라이언트 상태로는 판단할 수 없습니다.
     // (예전에는 항상 "관리자 없음"으로 판정해 admin/active 로 등록을 시도하다가
@@ -3220,7 +3581,8 @@ export default function App() {
     const trimmed = (username || '').trim();
     const trimmedMilId = (militaryId || '').trim();
     if (!trimmed || !trimmedMilId || !birthDate || !newPassword) return { ok: false, message: '모든 항목을 입력해주세요.' };
-    if (newPassword.length < 6) return { ok: false, message: '비밀번호는 6자 이상이어야 합니다.' };
+    const passwordError = validatePassword(newPassword);
+    if (passwordError) return { ok: false, message: passwordError };
     const { data, error } = await supabase.rpc('verify_and_reset_password', {
       p_username: trimmed,
       p_military_id: trimmedMilId,
@@ -3233,7 +3595,8 @@ export default function App() {
   };
 
   const changeOwnPassword = async (newPassword) => {
-    if (!newPassword || newPassword.length < 6) return { ok: false, message: '비밀번호는 6자 이상이어야 합니다.' };
+    const passwordError = validatePassword(newPassword);
+    if (passwordError) return { ok: false, message: passwordError };
     const { error } = await supabase.auth.updateUser({ password: newPassword });
     if (error) return { ok: false, message: `변경에 실패했습니다: ${error.message}` };
     return { ok: true };
@@ -3564,6 +3927,56 @@ export default function App() {
       showToast('불출 처리가 완료되었습니다.');
       return true;
     },
+    // 품목 하나를 여러 인원에게 한 번에 불출합니다. persist 가 테이블 전체를
+    // 다시 쓰기 때문에, 인원별로 나눠 저장하지 않고 한 번에 반영합니다.
+    issueItemBulk: async ({ personIds, itemId, warehouseId, qtyPerPerson, reason, date }) => {
+      const q = Number(qtyPerPerson) || 0;
+      const targets = Array.from(new Set(personIds || []));
+      if (!targets.length || !itemId || !warehouseId) { showToast('품목·창고·인원을 모두 선택해주세요.', 'danger'); return false; }
+      if (q <= 0) { showToast('1인당 수량을 올바르게 입력해주세요.', 'danger'); return false; }
+      const total = q * targets.length;
+      const avail = calc.stockAt(itemId, warehouseId);
+      if (total > avail) { showToast('해당 창고의 보유수량을 초과하여 불출할 수 없습니다.', 'danger'); return false; }
+
+      const { stock } = consumeFromRows(state.stock, itemId, warehouseId, total);
+      let holdings = [...state.holdings];
+      targets.forEach((personId) => {
+        const existing = holdings.find((h) => h.itemId === itemId && h.personId === personId);
+        if (existing) holdings = holdings.map((h) => (h.id === existing.id ? { ...h, qty: h.qty + q } : h));
+        else holdings.push({ id: uid('hd'), itemId, personId, qty: q });
+      });
+      const detail = `${(reason || '').trim() || '일괄불출'} (일괄 ${targets.length}명 · 1인당 ${q})`;
+      const log = [...state.log, ...targets.map((personId) => makeLog({
+        type: 'issue', itemName: calc.itemName(itemId), qty: q,
+        warehouseName: calc.whName(warehouseId), personName: calc.personName(personId), detail,
+      }))];
+      await persist({ ...state, stock, holdings, log });
+      showToast(`${targets.length}명에게 불출 처리가 완료되었습니다.`);
+      return true;
+    },
+    issueNewPropertyBulk: async ({ personIds, itemId, qtyPerPerson, reason, date }) => {
+      const q = Number(qtyPerPerson) || 0;
+      const targets = Array.from(new Set(personIds || []));
+      if (!targets.length || !itemId) { showToast('품목과 인원을 모두 선택해주세요.', 'danger'); return false; }
+      if (q <= 0) { showToast('1인당 수량을 올바르게 입력해주세요.', 'danger'); return false; }
+      const total = q * targets.length;
+
+      const items = state.items.map((it) => (it.id === itemId ? { ...it, propertyQty: it.propertyQty + total } : it));
+      let holdings = [...state.holdings];
+      targets.forEach((personId) => {
+        const existing = holdings.find((h) => h.itemId === itemId && h.personId === personId);
+        if (existing) holdings = holdings.map((h) => (h.id === existing.id ? { ...h, qty: h.qty + q } : h));
+        else holdings.push({ id: uid('hd'), itemId, personId, qty: q });
+      });
+      const detail = `${(reason || '').trim() || '재산 신규 취득 후 즉시 불출'} (일괄 ${targets.length}명 · 1인당 ${q})`;
+      const log = [...state.log, ...targets.map((personId) => makeLog({
+        type: 'issueNew', itemName: calc.itemName(itemId), qty: q,
+        personName: calc.personName(personId), detail,
+      }))];
+      await persist({ ...state, items, holdings, log });
+      showToast(`재산 ${fmtNum(total)} 증가 및 ${targets.length}명 불출 처리가 완료되었습니다.`);
+      return true;
+    },
     issueNewProperty: async ({ personId, itemId, qty, reason, date }) => {
       const q = Number(qty) || 0;
       if (!personId || !itemId) { showToast('인원과 품목을 선택해주세요.', 'danger'); return false; }
@@ -3672,15 +4085,28 @@ export default function App() {
   return (
     <div className="jamul-root flex h-screen w-full overflow-hidden">
       <GlobalStyle />
-      <Sidebar
-        activeTab={safeActiveTab}
-        setActiveTab={setActiveTab}
-        state={state}
-        calc={calc}
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed((v) => !v)}
-        isAdmin={isAdmin}
-      />
+      {sidebarOpen && (
+        <>
+          {/* 좁은 화면에서는 사이드바가 본문 위에 겹치므로, 뒤를 눌러 닫을 수 있게 합니다. */}
+          <div
+            className="fixed inset-0 z-30 md:hidden"
+            style={{ background: 'rgba(14,24,38,0.45)' }}
+            onClick={() => setSidebarOpen(false)}
+          />
+          <Sidebar
+            activeTab={safeActiveTab}
+            setActiveTab={(tab) => {
+              setActiveTab(tab);
+              // 좁은 화면에서는 메뉴를 고르면 바로 닫아서 내용이 가려지지 않게 합니다.
+              if (typeof window !== 'undefined' && window.innerWidth < 768) setSidebarOpen(false);
+            }}
+            state={state}
+            calc={calc}
+            onToggle={() => setSidebarOpen(false)}
+            isAdmin={isAdmin}
+          />
+        </>
+      )}
       <div className="flex-1 flex flex-col min-w-0">
         <Topbar
           activeTab={safeActiveTab}
@@ -3692,8 +4118,10 @@ export default function App() {
           activeUnit={activeUnit}
           canSwitchUnit={isSuperAdmin}
           onSwitchUnit={switchUnit}
+          menuOpen={sidebarOpen}
+          onToggleMenu={() => setSidebarOpen((v) => !v)}
         />
-        <main className="flex-1 overflow-y-auto jamul-scrollbar p-6">
+        <main className="flex-1 overflow-y-auto jamul-scrollbar p-4 md:p-6">
           {safeActiveTab === 'dashboard' && <DashboardView state={state} calc={calc} setActiveTab={setActiveTab} />}
           {safeActiveTab === 'inventory' && <InventoryView state={state} calc={calc} actions={actions} />}
           {safeActiveTab === 'warehouses' && <WarehousesView state={state} calc={calc} actions={actions} setConfirmState={setConfirmState} />}
