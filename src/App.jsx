@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Boxes, Warehouse, ArrowLeftRight, Users, Package,
   Trash2, ClipboardList, ShieldCheck, Plus, X, AlertTriangle,
   CheckCircle2, RefreshCw, Search, ChevronDown, ChevronRight,
-  UserPlus, LogOut, Pencil, Loader2, Menu, LayoutGrid, Scissors, Wrench
+  UserPlus, LogOut, Pencil, Loader2, Menu, LayoutGrid, Scissors, Wrench, KeyRound
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 
@@ -414,6 +414,7 @@ const NAV_ITEMS = [
   { id: 'disposal', label: '폐품 관리', icon: Trash2 },
   { id: 'log', label: '물자 이동 로그', icon: ClipboardList },
   { id: 'admins', label: '관리자 관리', icon: ShieldCheck },
+  { id: 'account', label: '개인정보', icon: KeyRound },
 ];
 
 function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle, isAdmin }) {
@@ -507,6 +508,7 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle, is
 const TAB_TITLES = {
   dashboard: '대시보드', inventory: '재고 현황', warehouses: '창고 관리', issuance: '불출 현황',
   persons: '인원 관리', itemsManage: '품목 관리', maintenance: '정비 입고', disposal: '폐품 관리', log: '물자 이동 로그', admins: '관리자 관리',
+  account: '개인정보',
 };
 
 function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch }) {
@@ -548,37 +550,66 @@ function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch 
 /* ---------------------------------------------------------------
  * 로그인 게이트
  * ------------------------------------------------------------- */
-function LoginGate({ onLogin, onSignup }) {
-  const [mode, setMode] = useState('login'); // 'login' | 'signup'
+function LoginGate({ onLogin, onSignup, onRecover }) {
+  const [mode, setMode] = useState('login'); // 'login' | 'signup' | 'recover'
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [role, setRole] = useState('user'); // 'user' | 'admin'
+  const [militaryId, setMilitaryId] = useState('');
+  const [birthDate, setBirthDate] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const submit = async () => {
-    setError('');
-    setNotice('');
-    if (!name.trim() || !password) { setError('이름과 비밀번호를 입력해주세요.'); return; }
-    if (mode === 'signup' && password !== confirm) { setError('비밀번호가 서로 일치하지 않습니다.'); return; }
-    setSubmitting(true);
-    const result = mode === 'login' ? await onLogin(name, password) : await onSignup(name, password, role);
-    setSubmitting(false);
-    if (!result.ok) {
-      if (result.pending) setNotice(result.message);
-      else setError(result.message);
-    }
-  };
-
-  const switchMode = (next) => {
-    setMode(next);
+  const reset = () => {
     setError('');
     setNotice('');
     setPassword('');
     setConfirm('');
     setRole('user');
+    setMilitaryId('');
+    setBirthDate('');
+  };
+
+  const switchMode = (next) => {
+    setMode(next);
+    reset();
+  };
+
+  const submit = async () => {
+    setError('');
+    setNotice('');
+
+    if (mode === 'login') {
+      if (!name.trim() || !password) { setError('이름과 비밀번호를 입력해주세요.'); return; }
+      setSubmitting(true);
+      const result = await onLogin(name, password);
+      setSubmitting(false);
+      if (!result.ok) { if (result.pending) setNotice(result.message); else setError(result.message); }
+      return;
+    }
+
+    if (mode === 'signup') {
+      if (!name.trim() || !password) { setError('이름과 비밀번호를 입력해주세요.'); return; }
+      if (password !== confirm) { setError('비밀번호가 서로 일치하지 않습니다.'); return; }
+      if (!militaryId.trim() || !birthDate) { setError('군번과 생년월일을 입력해주세요. (비밀번호를 잊었을 때 본인 확인에 사용됩니다)'); return; }
+      setSubmitting(true);
+      const result = await onSignup(name, password, role, militaryId, birthDate);
+      setSubmitting(false);
+      if (!result.ok) { if (result.pending) setNotice(result.message); else setError(result.message); }
+      return;
+    }
+
+    // recover
+    if (!name.trim() || !militaryId.trim() || !birthDate) { setError('이름, 군번, 생년월일을 모두 입력해주세요.'); return; }
+    if (!password) { setError('새 비밀번호를 입력해주세요.'); return; }
+    if (password !== confirm) { setError('새 비밀번호가 서로 일치하지 않습니다.'); return; }
+    setSubmitting(true);
+    const result = await onRecover(name, militaryId, birthDate, password);
+    setSubmitting(false);
+    if (!result.ok) setError(result.message);
+    else { setNotice('비밀번호가 재설정되었습니다. 새 비밀번호로 로그인해주세요.'); setMode('login'); setPassword(''); setConfirm(''); }
   };
 
   return (
@@ -595,22 +626,31 @@ function LoginGate({ onLogin, onSignup }) {
           </div>
         </div>
 
-        <div className="inline-flex rounded-lg border p-0.5 mt-6 mb-5" style={{ borderColor: 'var(--border)' }}>
-          <button
-            onClick={() => switchMode('login')}
-            className="px-4 py-1.5 rounded-md text-sm"
-            style={{ background: mode === 'login' ? 'var(--accent)' : 'transparent', color: mode === 'login' ? '#fff' : 'var(--ink-soft)' }}
-          >
-            로그인
-          </button>
-          <button
-            onClick={() => switchMode('signup')}
-            className="px-4 py-1.5 rounded-md text-sm"
-            style={{ background: mode === 'signup' ? 'var(--accent)' : 'transparent', color: mode === 'signup' ? '#fff' : 'var(--ink-soft)' }}
-          >
-            신규 등록
-          </button>
-        </div>
+        {mode !== 'recover' && (
+          <div className="inline-flex rounded-lg border p-0.5 mt-6 mb-5" style={{ borderColor: 'var(--border)' }}>
+            <button
+              onClick={() => switchMode('login')}
+              className="px-4 py-1.5 rounded-md text-sm"
+              style={{ background: mode === 'login' ? 'var(--accent)' : 'transparent', color: mode === 'login' ? '#fff' : 'var(--ink-soft)' }}
+            >
+              로그인
+            </button>
+            <button
+              onClick={() => switchMode('signup')}
+              className="px-4 py-1.5 rounded-md text-sm"
+              style={{ background: mode === 'signup' ? 'var(--accent)' : 'transparent', color: mode === 'signup' ? '#fff' : 'var(--ink-soft)' }}
+            >
+              신규 등록
+            </button>
+          </div>
+        )}
+        {mode === 'recover' && (
+          <div className="mt-6 mb-5">
+            <button onClick={() => switchMode('login')} className="text-xs" style={{ color: 'var(--accent)' }}>← 로그인으로 돌아가기</button>
+            <h2 className="text-sm font-bold mt-2" style={{ color: 'var(--ink)' }}>비밀번호 찾기</h2>
+            <p className="text-xs mt-1" style={{ color: 'var(--ink-soft)' }}>가입 시 등록한 이름·군번·생년월일로 본인 확인 후 새 비밀번호를 설정합니다.</p>
+          </div>
+        )}
 
         <div className="space-y-3">
           {mode === 'signup' && (
@@ -650,27 +690,51 @@ function LoginGate({ onLogin, onSignup }) {
               style={{ borderColor: 'var(--border)' }}
             />
           </div>
+          {(mode === 'signup' || mode === 'recover') && (
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>군번</label>
+                <input
+                  value={militaryId}
+                  onChange={(e) => setMilitaryId(e.target.value)}
+                  placeholder="군번 입력"
+                  className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
+                  style={{ borderColor: 'var(--border)' }}
+                />
+              </div>
+              <div className="flex-1">
+                <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>생년월일</label>
+                <input
+                  type="date"
+                  value={birthDate}
+                  onChange={(e) => setBirthDate(e.target.value)}
+                  className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
+                  style={{ borderColor: 'var(--border)' }}
+                />
+              </div>
+            </div>
+          )}
           <div>
-            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>비밀번호</label>
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>{mode === 'recover' ? '새 비밀번호' : '비밀번호'}</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && mode === 'login') submit(); }}
-              placeholder={mode === 'signup' ? '6자 이상 입력' : '비밀번호 입력'}
+              placeholder={mode === 'login' ? '비밀번호 입력' : '6자 이상 입력'}
               className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
               style={{ borderColor: 'var(--border)' }}
             />
           </div>
-          {mode === 'signup' && (
+          {(mode === 'signup' || mode === 'recover') && (
             <div>
-              <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>비밀번호 확인</label>
+              <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>{mode === 'recover' ? '새 비밀번호 확인' : '비밀번호 확인'}</label>
               <input
                 type="password"
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
-                placeholder="비밀번호 다시 입력"
+                placeholder="다시 입력"
                 className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
                 style={{ borderColor: 'var(--border)' }}
               />
@@ -689,8 +753,14 @@ function LoginGate({ onLogin, onSignup }) {
             disabled={submitting}
             className="jamul-btn-primary w-full rounded-lg py-2.5 text-sm font-medium mt-1"
           >
-            {submitting ? '처리 중...' : mode === 'login' ? '로그인' : '등록하고 시작하기'}
+            {submitting ? '처리 중...' : mode === 'login' ? '로그인' : mode === 'signup' ? '등록하고 시작하기' : '비밀번호 재설정'}
           </button>
+
+          {mode === 'login' && (
+            <button onClick={() => switchMode('recover')} className="w-full text-center text-xs mt-1" style={{ color: 'var(--ink-soft)' }}>
+              비밀번호를 잊으셨나요? <span style={{ color: 'var(--accent)' }}>찾기</span>
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -1943,10 +2013,12 @@ function CreateItemModal({ state, actions, onClose }) {
 
 function AdjustPropertyModal({ itemId, state, calc, actions, onClose }) {
   const item = calc.item(itemId);
-  const [delta, setDelta] = useState('');
+  const [sign, setSign] = useState(1);
+  const [amount, setAmount] = useState('');
   const [warehouseId, setWarehouseId] = useState('');
 
   const submit = async () => {
+    const delta = sign * (Number(amount) || 0);
     await actions.adjustProperty(itemId, delta, warehouseId);
     onClose();
   };
@@ -1956,8 +2028,27 @@ function AdjustPropertyModal({ itemId, state, calc, actions, onClose }) {
       <div className="space-y-3">
         <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>현재 재산수량: {fmtNum(item?.propertyQty || 0)}{item?.unit}</p>
         <div>
-          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>변경 수량 (늘리려면 양수, 줄이려면 음수)</label>
-          <input type="number" value={delta} onChange={(e) => setDelta(e.target.value)} placeholder="예: 5 (증가) 또는 -3 (감소)" className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>증감 구분</label>
+          <div className="grid grid-cols-2 gap-2 mt-1">
+            <button
+              onClick={() => setSign(1)}
+              className="px-3 py-2 rounded-lg text-sm border font-medium"
+              style={{ borderColor: sign === 1 ? 'var(--accent)' : 'var(--border)', background: sign === 1 ? 'var(--success-bg)' : 'var(--surface)', color: sign === 1 ? 'var(--accent)' : 'var(--ink-soft)' }}
+            >
+              + 증가
+            </button>
+            <button
+              onClick={() => setSign(-1)}
+              className="px-3 py-2 rounded-lg text-sm border font-medium"
+              style={{ borderColor: sign === -1 ? 'var(--danger)' : 'var(--border)', background: sign === -1 ? 'var(--danger-bg)' : 'var(--surface)', color: sign === -1 ? 'var(--danger)' : 'var(--ink-soft)' }}
+            >
+              − 감소
+            </button>
+          </div>
+        </div>
+        <div>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>수량</label>
+          <input type="number" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
         </div>
         <div>
           <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>대상 창고</label>
@@ -1965,7 +2056,7 @@ function AdjustPropertyModal({ itemId, state, calc, actions, onClose }) {
             <option value="">선택</option>
             {state.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
-          <p className="text-xs mt-1" style={{ color: 'var(--ink-soft)' }}>양수는 선택한 창고에 입고, 음수는 선택한 창고에서 차감됩니다.</p>
+          <p className="text-xs mt-1" style={{ color: 'var(--ink-soft)' }}>증가는 선택한 창고에 입고, 감소는 선택한 창고에서 차감됩니다.</p>
         </div>
         <button onClick={submit} className="jamul-btn-primary w-full rounded-lg py-2.5 text-sm font-medium mt-2">수정</button>
       </div>
@@ -2529,6 +2620,88 @@ function AdminsView({ state, currentAdmin, adminActions, setConfirmState }) {
 }
 
 /* ---------------------------------------------------------------
+ * 개인정보 (내 계정)
+ * ------------------------------------------------------------- */
+function MyAccountView({ currentAdmin, isAdmin, onChangePassword }) {
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async () => {
+    setError('');
+    setNotice('');
+    if (!password) { setError('새 비밀번호를 입력해주세요.'); return; }
+    if (password !== confirm) { setError('비밀번호가 서로 일치하지 않습니다.'); return; }
+    setSubmitting(true);
+    const result = await onChangePassword(password);
+    setSubmitting(false);
+    if (!result.ok) { setError(result.message); return; }
+    setNotice('비밀번호가 변경되었습니다.');
+    setPassword('');
+    setConfirm('');
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="jamul-card p-4">
+        <h3 className="text-sm font-bold mb-1" style={{ color: 'var(--ink)' }}>내 정보</h3>
+        <div className="flex items-center gap-2 mt-3">
+          <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-white" style={{ background: 'var(--accent)' }}>{currentAdmin?.[0]}</span>
+          <div>
+            <p className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{currentAdmin}</p>
+            <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>{isAdmin ? '관리자' : '일반 사용자'}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="jamul-card p-4 max-w-md">
+        <h3 className="text-sm font-bold mb-3" style={{ color: 'var(--ink)' }}>비밀번호 변경</h3>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>새 비밀번호</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="6자 이상 입력"
+              className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
+              style={{ borderColor: 'var(--border)' }}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>새 비밀번호 확인</label>
+            <input
+              type="password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+              placeholder="다시 입력"
+              className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
+              style={{ borderColor: 'var(--border)' }}
+            />
+          </div>
+          {error && (
+            <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}>{error}</p>
+          )}
+          {notice && (
+            <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--success-bg)', color: 'var(--success)' }}>{notice}</p>
+          )}
+          <button
+            onClick={submit}
+            disabled={submitting}
+            className="jamul-btn-primary w-full rounded-lg py-2.5 text-sm font-medium"
+          >
+            {submitting ? '변경 중...' : '비밀번호 변경'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
  * App (default export)
  * ------------------------------------------------------------- */
 export default function App() {
@@ -2632,10 +2805,12 @@ export default function App() {
     return { ok: true };
   };
 
-  const signUpAdmin = async (name, password, role) => {
+  const signUpAdmin = async (name, password, role, militaryId, birthDate) => {
     const trimmed = (name || '').trim();
+    const trimmedMilId = (militaryId || '').trim();
     if (!trimmed || !password) return { ok: false, message: '이름과 비밀번호를 입력해주세요.' };
     if (password.length < 6) return { ok: false, message: '비밀번호는 6자 이상이어야 합니다.' };
+    if (!trimmedMilId || !birthDate) return { ok: false, message: '군번과 생년월일을 입력해주세요.' };
     const wantsAdmin = role === 'admin';
     const noActiveAdmin = !state.admins.some((a) => a.role === 'admin' && a.status === 'active');
     const status = wantsAdmin ? (noActiveAdmin ? 'active' : 'pending') : 'active';
@@ -2654,6 +2829,10 @@ export default function App() {
     if (insErr) {
       return { ok: false, message: `등록에 실패했습니다: ${insErr.message}` };
     }
+    const { error: secErr } = await supabase.from('admin_secrets').insert({ id: userId, military_id: trimmedMilId, birth_date: birthDate });
+    if (secErr) {
+      console.error('본인확인 정보 저장 실패:', secErr);
+    }
     if (!data.session) {
       return { ok: false, message: '등록되었습니다. 관리자에게 이메일 인증(Confirm email) 설정을 꺼달라고 요청해주세요.' };
     }
@@ -2661,6 +2840,29 @@ export default function App() {
       await supabase.auth.signOut();
       return { ok: false, pending: true, message: '신청이 접수되었습니다. 기존 관리자의 승인 후 등록이 완료됩니다.' };
     }
+    return { ok: true };
+  };
+
+  const recoverPassword = async (name, militaryId, birthDate, newPassword) => {
+    const trimmed = (name || '').trim();
+    const trimmedMilId = (militaryId || '').trim();
+    if (!trimmed || !trimmedMilId || !birthDate || !newPassword) return { ok: false, message: '모든 항목을 입력해주세요.' };
+    if (newPassword.length < 6) return { ok: false, message: '비밀번호는 6자 이상이어야 합니다.' };
+    const { data, error } = await supabase.rpc('verify_and_reset_password', {
+      p_name: trimmed,
+      p_military_id: trimmedMilId,
+      p_birth_date: birthDate,
+      p_new_password: newPassword,
+    });
+    if (error) return { ok: false, message: `처리에 실패했습니다: ${error.message}` };
+    if (!data) return { ok: false, message: '입력하신 정보와 일치하는 계정을 찾을 수 없습니다.' };
+    return { ok: true };
+  };
+
+  const changeOwnPassword = async (newPassword) => {
+    if (!newPassword || newPassword.length < 6) return { ok: false, message: '비밀번호는 6자 이상이어야 합니다.' };
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) return { ok: false, message: `변경에 실패했습니다: ${error.message}` };
     return { ok: true };
   };
 
@@ -3029,7 +3231,7 @@ export default function App() {
   }
 
   if (!currentAdmin) {
-    return <LoginGate onLogin={loginAs} onSignup={signUpAdmin} />;
+    return <LoginGate onLogin={loginAs} onSignup={signUpAdmin} onRecover={recoverPassword} />;
   }
 
   const isAdmin = currentRole === 'admin';
@@ -3066,6 +3268,7 @@ export default function App() {
           {safeActiveTab === 'disposal' && <DisposalView state={state} calc={calc} actions={guardedActions} setConfirmState={setConfirmState} />}
           {safeActiveTab === 'log' && <LogView state={state} />}
           {safeActiveTab === 'admins' && isAdmin && <AdminsView state={state} currentAdmin={currentAdmin} adminActions={adminActions} setConfirmState={setConfirmState} />}
+          {safeActiveTab === 'account' && <MyAccountView currentAdmin={currentAdmin} isAdmin={isAdmin} onChangePassword={changeOwnPassword} />}
         </main>
       </div>
       <Toast toast={toast} />
