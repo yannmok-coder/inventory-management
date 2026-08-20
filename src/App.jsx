@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Boxes, Warehouse, ArrowLeftRight, Users, Package,
   Trash2, ClipboardList, ShieldCheck, Plus, X, AlertTriangle,
   CheckCircle2, RefreshCw, Search, ChevronDown, ChevronRight,
-  UserPlus, LogOut, Pencil, Loader2, Menu, LayoutGrid, Scissors, Wrench, KeyRound
+  UserPlus, LogOut, Pencil, Loader2, Menu, LayoutGrid, Scissors, Wrench, KeyRound, Download
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 
@@ -625,6 +625,73 @@ function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch,
 /* ---------------------------------------------------------------
  * 로그인 게이트
  * ------------------------------------------------------------- */
+// 홈 화면 설치(PWA). 크롬 계열은 beforeinstallprompt 이벤트를 잡아 두었다가
+// 버튼을 눌렀을 때 설치창을 띄우고, 이 이벤트가 없는 iOS 사파리는 안내문을 보여줍니다.
+function usePwaInstall() {
+  const [promptEvent, setPromptEvent] = useState(null);
+  const [installed, setInstalled] = useState(false);
+
+  useEffect(() => {
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+    if (standalone) setInstalled(true);
+
+    const onPrompt = (e) => { e.preventDefault(); setPromptEvent(e); };
+    const onInstalled = () => { setInstalled(true); setPromptEvent(null); };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onPrompt);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
+  }, []);
+
+  const install = async () => {
+    if (!promptEvent) return 'unavailable';
+    promptEvent.prompt();
+    const { outcome } = await promptEvent.userChoice;
+    setPromptEvent(null);
+    return outcome;
+  };
+
+  return { canInstall: !!promptEvent, installed, install };
+}
+
+function InstallAppButton() {
+  const { canInstall, installed, install } = usePwaInstall();
+  const [hint, setHint] = useState('');
+
+  if (installed) return null;
+
+  const isIos = /iphone|ipad|ipod/i.test(window.navigator.userAgent);
+
+  const onClick = async () => {
+    if (canInstall) {
+      const outcome = await install();
+      if (outcome === 'dismissed') setHint('설치를 취소했습니다. 다시 누르면 설치할 수 있습니다.');
+      return;
+    }
+    setHint(isIos
+      ? 'Safari 아래쪽 공유 버튼을 누르고 [홈 화면에 추가]를 선택해주세요.'
+      : '브라우저 메뉴(⋮)에서 [앱 설치] 또는 [홈 화면에 추가]를 선택해주세요.');
+  };
+
+  return (
+    <div className="mt-5 pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="w-full rounded-lg border py-2.5 text-sm font-medium flex items-center justify-center gap-2 jamul-focus"
+        style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+      >
+        <Download size={14} />어플 설치하기
+      </button>
+      <p className="text-xs mt-2 text-center" style={{ color: 'var(--ink-soft)' }}>
+        {hint || '홈 화면에 추가하면 앱처럼 바로 열 수 있습니다.'}
+      </p>
+    </div>
+  );
+}
+
 function LoginGate({ onLogin, onSignup, onRecover }) {
   const [mode, setMode] = useState('login'); // 'login' | 'signup' | 'recover'
   const [username, setUsername] = useState('');
@@ -883,6 +950,8 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
             </button>
           )}
         </div>
+
+        <InstallAppButton />
       </div>
     </div>
   );
