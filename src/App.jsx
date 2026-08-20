@@ -154,6 +154,7 @@ const TYPE_LABEL = {
   maintenanceIn: '정비 입고',
   maintenanceDone: '정비 완료',
   maintenanceCancel: '정비 입고 취소',
+  rename: '품목명 변경',
   issueNew: '신규 재산 불출',
   transferPerson: '인원간 이동',
 };
@@ -2550,9 +2551,64 @@ function AdjustPropertyModal({ itemId, state, calc, actions, onClose }) {
   );
 }
 
+function RenameItemModal({ group, actions, onClose }) {
+  const [name, setName] = useState(group.name);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const sizeCount = group.items.length;
+
+  const submit = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) { setError('품목명을 입력해주세요.'); return; }
+    setSubmitting(true);
+    const ok = await actions.renameItems(group.items.map((it) => it.id), trimmed);
+    setSubmitting(false);
+    if (ok) onClose();
+  };
+
+  return (
+    <Modal title="품목명 수정" onClose={onClose}>
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>현재 품목</label>
+          <p className="text-sm mt-1" style={{ color: 'var(--ink)' }}>
+            {group.name}
+            {group.season && <span className="text-xs ml-1" style={{ color: 'var(--ink-soft)' }}>· {group.season}</span>}
+            {sizeCount > 1 && <span className="text-xs ml-1" style={{ color: 'var(--ink-soft)' }}>· 사이즈 {sizeCount}종</span>}
+          </p>
+        </div>
+        <div>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>새 품목명</label>
+          <input
+            value={name}
+            onChange={(e) => { setName(e.target.value); setError(''); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+            placeholder="새 품목명 입력"
+            className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
+            style={{ borderColor: 'var(--border)' }}
+          />
+        </div>
+        <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--warning-bg)', color: 'var(--warning)' }}>
+          {sizeCount > 1
+            ? `묶여 있는 사이즈 ${sizeCount}종의 이름이 함께 바뀝니다. `
+            : ''}
+          진행중인 폐기·정비 건의 품목명도 같이 수정됩니다. 물자 이동 로그에는 예전 이름이 기록으로 남습니다.
+        </p>
+        {error && (
+          <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}>{error}</p>
+        )}
+        <button onClick={submit} disabled={submitting} className="jamul-btn-primary w-full rounded-lg py-2.5 text-sm font-medium mt-1">
+          {submitting ? '저장 중...' : '저장'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 function ItemsView({ state, calc, actions, setConfirmState }) {
   const [showCreate, setShowCreate] = useState(false);
   const [adjustPropItem, setAdjustPropItem] = useState(null);
+  const [renameGroup, setRenameGroup] = useState(null);
   const [seasonFilter, setSeasonFilter] = useState('all');
   const [partFilter, setPartFilter] = useState('all');
   const [expandedGroup, setExpandedGroup] = useState(null);
@@ -2565,6 +2621,7 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
   // 같은 이름끼리 묶되 동계/하계는 따로 묶습니다. 정렬은 자음·모음 순.
   const groups = groupItemsByNameSeason(filteredItems);
 
+  // indent 된 행은 묶음에 속한 사이즈라서, 이름은 묶음 단위(부모 행)에서만 바꿉니다.
   const renderItemRow = (it, indent) => (
     <tr key={it.id} className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
       <td className={`px-4 py-3 ${indent ? 'pl-10' : 'font-medium'}`} style={{ color: indent ? 'var(--ink-soft)' : 'var(--ink)' }}>{it.name}</td>
@@ -2575,7 +2632,16 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
       <td className="px-4 py-3 text-right jamul-mono">{fmtNum(it.propertyQty)}</td>
       <td className="px-4 py-3 text-right jamul-mono" style={{ color: calc.maintenanceQty(it.id) > 0 ? 'var(--warning)' : 'var(--ink-soft)' }}>{fmtNum(calc.maintenanceQty(it.id))}</td>
       <td className="px-4 py-3 text-right"><DiffBadge value={calc.diff(it)} /></td>
-      <td className="px-4 py-3 text-right">
+      <td className="px-4 py-3 text-right whitespace-nowrap">
+        {!indent && (
+          <button
+            onClick={() => setRenameGroup({ name: it.name, season: it.season || '', items: [it] })}
+            className="text-xs px-2.5 py-1.5 rounded-md border inline-flex items-center gap-1 mr-1"
+            style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
+          >
+            <Pencil size={12} />이름 수정
+          </button>
+        )}
         <button onClick={() => setAdjustPropItem(it.id)} className="text-xs px-2.5 py-1.5 rounded-md border inline-flex items-center gap-1 mr-1" style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}>
           <Pencil size={12} />재산 수정
         </button>
@@ -2658,7 +2724,15 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
                     <td className="px-4 py-3 text-right jamul-mono font-semibold">{fmtNum(totals.propertyQty)}</td>
                     <td className="px-4 py-3 text-right jamul-mono font-semibold" style={{ color: totals.maintenance > 0 ? 'var(--warning)' : 'var(--ink-soft)' }}>{fmtNum(totals.maintenance)}</td>
                     <td className="px-4 py-3 text-right"><DiffBadge value={totals.diff} /></td>
-                    <td className="px-4 py-3 text-right" style={{ color: 'var(--ink-soft)' }}>—</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setRenameGroup(g); }}
+                        className="text-xs px-2.5 py-1.5 rounded-md border inline-flex items-center gap-1"
+                        style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
+                      >
+                        <Pencil size={12} />이름 수정
+                      </button>
+                    </td>
                   </tr>
                   {isOpen && g.items.map((it) => renderItemRow(it, true))}
                 </React.Fragment>
@@ -2668,6 +2742,7 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
         </table>
       </div>
 
+      {renameGroup && <RenameItemModal group={renameGroup} actions={actions} onClose={() => setRenameGroup(null)} />}
       {showCreate && <CreateItemModal state={state} actions={actions} onClose={() => setShowCreate(false)} />}
       {adjustPropItem && <AdjustPropertyModal itemId={adjustPropItem} state={state} calc={calc} actions={actions} onClose={() => setAdjustPropItem(null)} />}
     </div>
@@ -3774,6 +3849,43 @@ export default function App() {
       }
       await persist({ ...state, items: [...state.items, item], stock, log });
       showToast(`'${item.name}' 품목이 등록되었습니다.`);
+    },
+    // 묶여있는 사이즈들의 이름을 한 번에 바꿉니다. 성공하면 true.
+    renameItems: async (itemIds, newName) => {
+      const trimmed = (newName || '').trim();
+      if (!trimmed) { showToast('품목명을 입력해주세요.', 'danger'); return false; }
+      const ids = new Set(itemIds);
+      const targets = state.items.filter((it) => ids.has(it.id));
+      if (targets.length === 0) return false;
+      const oldName = targets[0].name;
+      if (targets.every((it) => it.name === trimmed)) return true;
+
+      // 이름을 바꾼 뒤 같은 계절·사이즈 품목이 겹치면 막습니다.
+      const clash = targets.find((t) => state.items.some((x) => (
+        !ids.has(x.id)
+        && x.name === trimmed
+        && (x.season || '') === (t.season || '')
+        && (x.size || '') === (t.size || '')
+      )));
+      if (clash) {
+        showToast(`'${trimmed}' 에 같은 계절·사이즈(${clash.size || '사이즈 없음'}) 품목이 이미 있습니다.`, 'danger');
+        return false;
+      }
+
+      const items = state.items.map((it) => (ids.has(it.id) ? { ...it, name: trimmed } : it));
+      // 진행중인 폐기·정비 건에 복사돼 있는 품목명도 함께 맞춥니다.
+      // 이동 로그는 당시의 기록이므로 예전 이름 그대로 둡니다.
+      const disposals = state.disposals.map((d) => (ids.has(d.itemId) ? { ...d, itemName: trimmed } : d));
+      const maintenance = state.maintenance.map((m) => (ids.has(m.itemId) ? { ...m, itemName: trimmed } : m));
+      const log = [...state.log, makeLog({
+        type: 'rename',
+        itemName: trimmed,
+        qty: 0,
+        detail: `품목명 변경: '${oldName}' → '${trimmed}'${targets.length > 1 ? ` (사이즈 ${targets.length}종)` : ''}`,
+      })];
+      await persist({ ...state, items, disposals, maintenance, log });
+      showToast('품목명이 수정되었습니다.');
+      return true;
     },
     adjustProperty: async (itemId, delta, warehouseId) => {
       const d = Number(delta);
