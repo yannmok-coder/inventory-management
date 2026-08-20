@@ -20,6 +20,42 @@ const usernameToEmail = (username) => {
   const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
   return `u${hex}@jamul.local`;
 };
+
+// 관리부대(중대). 데이터는 중대별로 완전히 분리되어 저장·조회됩니다.
+const MGMT_UNITS = ['3중대', '5중대'];
+
+// 아이디 규칙: 영문과 숫자만, 그리고 'admin'/'root' 가 들어간 아이디는 금지.
+const USERNAME_PATTERN = /^[A-Za-z0-9]+$/;
+const FORBIDDEN_USERNAME_WORDS = ['admin', 'root'];
+
+const validateUsername = (username) => {
+  const trimmed = (username || '').trim();
+  if (!trimmed) return '아이디를 입력해주세요.';
+  if (trimmed.length < 3) return '아이디는 3자 이상 입력해주세요.';
+  if (trimmed.length > 20) return '아이디는 20자 이하로 입력해주세요.';
+  if (!USERNAME_PATTERN.test(trimmed)) return '아이디는 영문과 숫자만 사용할 수 있습니다.';
+  const lowered = trimmed.toLowerCase();
+  const forbidden = FORBIDDEN_USERNAME_WORDS.find((word) => lowered.includes(word));
+  if (forbidden) return `'${forbidden}'가 포함된 아이디는 사용할 수 없습니다.`;
+  return null;
+};
+
+// 아이디 중복확인. 신규 등록 화면은 로그인 전(anon)이라 admins 테이블을 직접
+// 조회할 수 없어서, security definer 함수(is_username_taken)로 확인합니다.
+// excludeId를 넘기면 그 계정(=본인)은 중복 대상에서 제외합니다.
+const checkUsernameAvailable = async (username, excludeId = null) => {
+  const trimmed = (username || '').trim();
+  const invalid = validateUsername(trimmed);
+  if (invalid) return { ok: false, message: invalid };
+  const { data, error } = await supabase.rpc('is_username_taken', {
+    p_username: trimmed,
+    p_exclude_id: excludeId,
+  });
+  if (error) return { ok: false, message: `중복확인에 실패했습니다: ${error.message}` };
+  if (data) return { ok: false, message: '이미 사용중인 아이디입니다.' };
+  return { ok: true, message: `'${trimmed}'은(는) 사용할 수 있는 아이디입니다.` };
+};
+
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const nowIso = () => new Date().toISOString();
 const fmtNum = (n) => (Number(n) || 0).toLocaleString('ko-KR');
@@ -132,7 +168,7 @@ function warehousesWithStock(state, itemId) {
  * 많아지면 테이블별로 필요한 행만 insert/update/delete 하는 방식으로
  * 바꾸는 것이 좋습니다.)
  * ------------------------------------------------------------- */
-const mapAdminFromDb = (r) => ({ id: r.id, name: r.name, username: r.username || '', role: r.role || 'user', status: r.status || 'active' });
+const mapAdminFromDb = (r) => ({ id: r.id, name: r.name, username: r.username || '', role: r.role || 'user', status: r.status || 'active', mgmtUnit: r.mgmt_unit || MGMT_UNITS[0], isSuper: !!r.is_super });
 
 const mapWarehouseFromDb = (r) => ({ id: r.id, name: r.name, location: r.location || '' });
 const mapWarehouseToDb = (w) => ({ id: w.id, name: w.name, location: w.location || '' });
@@ -161,21 +197,24 @@ const mapMaintenanceToDb = (m) => ({ id: m.id, item_id: m.itemId, item_name: m.i
 const mapLogFromDb = (r) => ({ id: r.id, type: r.type, date: r.date, itemName: r.item_name, qty: r.qty, warehouseName: r.warehouse_name, personName: r.person_name, detail: r.detail, actor: r.actor });
 const mapLogToDb = (l) => ({ id: l.id, type: l.type, date: l.date, item_name: l.itemName, qty: l.qty, warehouse_name: l.warehouseName || null, person_name: l.personName || null, detail: l.detail || null, actor: l.actor || null });
 
-async function loadState() {
+// 관리부대(mgmtUnit) 하나의 데이터만 읽어옵니다. RLS 로도 접근 가능한 중대만
+// 내려오지만, 최고 관리자는 두 중대를 모두 볼 수 있으므로 여기서 한 번 더 좁힙니다.
+// admin_secrets 에는 mgmt_unit 이 없고 RLS 가 본인·같은 중대 관리자로 제한합니다.
+async function loadState(mgmtUnit) {
   const [
     admins, adminSecrets, warehouses, shelves, items, stock, persons, holdings, disposals, maintenance, log,
   ] = await Promise.all([
-    supabase.from('admins').select('*'),
+    supabase.from('admins').select('*').eq('mgmt_unit', mgmtUnit),
     supabase.from('admin_secrets').select('*'),
-    supabase.from('warehouses').select('*'),
-    supabase.from('shelves').select('*'),
-    supabase.from('items').select('*'),
-    supabase.from('stock').select('*'),
-    supabase.from('persons').select('*'),
-    supabase.from('holdings').select('*'),
-    supabase.from('disposals').select('*'),
-    supabase.from('maintenance').select('*'),
-    supabase.from('movement_log').select('*'),
+    supabase.from('warehouses').select('*').eq('mgmt_unit', mgmtUnit),
+    supabase.from('shelves').select('*').eq('mgmt_unit', mgmtUnit),
+    supabase.from('items').select('*').eq('mgmt_unit', mgmtUnit),
+    supabase.from('stock').select('*').eq('mgmt_unit', mgmtUnit),
+    supabase.from('persons').select('*').eq('mgmt_unit', mgmtUnit),
+    supabase.from('holdings').select('*').eq('mgmt_unit', mgmtUnit),
+    supabase.from('disposals').select('*').eq('mgmt_unit', mgmtUnit),
+    supabase.from('maintenance').select('*').eq('mgmt_unit', mgmtUnit),
+    supabase.from('movement_log').select('*').eq('mgmt_unit', mgmtUnit),
   ]);
   const firstError = [admins, adminSecrets, warehouses, shelves, items, stock, persons, holdings, disposals, maintenance, log]
     .map((r) => r.error).find(Boolean);
@@ -203,16 +242,33 @@ async function loadState() {
   };
 }
 
-async function syncTable(table, rows) {
-  const { error: delErr } = await supabase.from(table).delete().not('id', 'is', null);
+// 최고 관리자가 다른 중대를 보고 있어도 "내 정보"는 항상 본인 계정이어야 하므로,
+// state.admins 에 의존하지 않고 따로 읽어옵니다.
+async function loadMyProfile(userId) {
+  const [{ data: profile }, { data: secret }] = await Promise.all([
+    supabase.from('admins').select('*').eq('id', userId).maybeSingle(),
+    supabase.from('admin_secrets').select('*').eq('id', userId).maybeSingle(),
+  ]);
+  if (!profile) return null;
+  return {
+    ...mapAdminFromDb(profile),
+    militaryId: secret?.military_id || '',
+    birthDate: secret?.birth_date || '',
+  };
+}
+
+// 해당 중대의 행만 지우고 다시 넣습니다. mgmt_unit 조건이 빠지면 최고 관리자가
+// 저장할 때 다른 중대의 데이터까지 지워지므로 반드시 필요합니다.
+async function syncTable(table, rows, mgmtUnit) {
+  const { error: delErr } = await supabase.from(table).delete().eq('mgmt_unit', mgmtUnit);
   if (delErr) throw delErr;
   if (rows.length > 0) {
-    const { error: insErr } = await supabase.from(table).insert(rows);
+    const { error: insErr } = await supabase.from(table).insert(rows.map((r) => ({ ...r, mgmt_unit: mgmtUnit })));
     if (insErr) throw insErr;
   }
 }
 
-async function saveState(state) {
+async function saveState(state, mgmtUnit) {
   const flatShelves = [];
   state.warehouses.forEach((w) => {
     (w.shelves || []).forEach((s) => {
@@ -222,15 +278,15 @@ async function saveState(state) {
   const warehouseRows = state.warehouses.map(({ shelves, ...w }) => mapWarehouseToDb(w));
 
   await Promise.all([
-    syncTable('warehouses', warehouseRows),
-    syncTable('shelves', flatShelves),
-    syncTable('items', state.items.map(mapItemToDb)),
-    syncTable('stock', state.stock.map(mapStockToDb)),
-    syncTable('persons', state.persons.map(mapPersonToDb)),
-    syncTable('holdings', state.holdings.map(mapHoldingToDb)),
-    syncTable('disposals', state.disposals.map(mapDisposalToDb)),
-    syncTable('maintenance', state.maintenance.map(mapMaintenanceToDb)),
-    syncTable('movement_log', state.log.map(mapLogToDb)),
+    syncTable('warehouses', warehouseRows, mgmtUnit),
+    syncTable('shelves', flatShelves, mgmtUnit),
+    syncTable('items', state.items.map(mapItemToDb), mgmtUnit),
+    syncTable('stock', state.stock.map(mapStockToDb), mgmtUnit),
+    syncTable('persons', state.persons.map(mapPersonToDb), mgmtUnit),
+    syncTable('holdings', state.holdings.map(mapHoldingToDb), mgmtUnit),
+    syncTable('disposals', state.disposals.map(mapDisposalToDb), mgmtUnit),
+    syncTable('maintenance', state.maintenance.map(mapMaintenanceToDb), mgmtUnit),
+    syncTable('movement_log', state.log.map(mapLogToDb), mgmtUnit),
   ]);
 }
 
@@ -515,7 +571,8 @@ const TAB_TITLES = {
   account: '개인정보',
 };
 
-function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch }) {
+function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch, activeUnit, canSwitchUnit, onSwitchUnit }) {
+  const otherUnit = MGMT_UNITS.find((u) => u !== activeUnit) || activeUnit;
   return (
     <header className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
       <div>
@@ -528,6 +585,20 @@ function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch 
             <Loader2 size={12} className="animate-spin" />저장 중
           </span>
         )}
+        <span className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>관리부대 :</span>
+        <button
+          onClick={() => canSwitchUnit && onSwitchUnit(otherUnit)}
+          disabled={!canSwitchUnit}
+          title={canSwitchUnit ? `${otherUnit}로 전환` : '소속 중대의 데이터만 볼 수 있습니다'}
+          className="text-xs font-medium px-2.5 py-1.5 rounded-lg border jamul-focus"
+          style={{
+            borderColor: canSwitchUnit ? 'var(--accent)' : 'var(--border)',
+            color: canSwitchUnit ? 'var(--accent)' : 'var(--ink-soft)',
+            cursor: canSwitchUnit ? 'pointer' : 'default',
+          }}
+        >
+          {activeUnit}
+        </button>
         <button onClick={onRefresh} className="p-2 rounded-lg border jamul-focus" style={{ borderColor: 'var(--border)' }} title="새로고침">
           <RefreshCw size={14} />
         </button>
@@ -562,9 +633,12 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
   const [confirm, setConfirm] = useState('');
   const [militaryId, setMilitaryId] = useState('');
   const [birthDate, setBirthDate] = useState('');
+  const [mgmtUnit, setMgmtUnit] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [usernameCheck, setUsernameCheck] = useState(null);
+  const [checkingUsername, setCheckingUsername] = useState(false);
 
   const reset = () => {
     setError('');
@@ -574,6 +648,16 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
     setMilitaryId('');
     setBirthDate('');
     setName('');
+    setMgmtUnit('');
+    setUsernameCheck(null);
+  };
+
+  const runUsernameCheck = async () => {
+    setError('');
+    setCheckingUsername(true);
+    const result = await checkUsernameAvailable(username);
+    setCheckingUsername(false);
+    setUsernameCheck(result);
   };
 
   const switchMode = (next) => {
@@ -596,10 +680,12 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
 
     if (mode === 'signup') {
       if (!username.trim() || !name.trim() || !password) { setError('아이디, 이름, 비밀번호를 입력해주세요.'); return; }
+      if (!usernameCheck?.ok) { setError('아이디 중복확인을 해주세요.'); return; }
+      if (!mgmtUnit) { setError('등록할 제대를 선택해주세요.'); return; }
       if (password !== confirm) { setError('비밀번호가 서로 일치하지 않습니다.'); return; }
       if (!militaryId.trim() || !birthDate) { setError('군번과 생년월일을 입력해주세요. (비밀번호를 잊었을 때 본인 확인에 사용됩니다)'); return; }
       setSubmitting(true);
-      const result = await onSignup(username, name, password, militaryId, birthDate);
+      const result = await onSignup(username, name, password, militaryId, birthDate, mgmtUnit);
       setSubmitting(false);
       if (!result.ok) { if (result.pending) setNotice(result.message); else setError(result.message); }
       return;
@@ -664,13 +750,31 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
           )}
           <div>
             <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>아이디</label>
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="아이디 입력"
-              className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
-              style={{ borderColor: 'var(--border)' }}
-            />
+            <div className="flex gap-2 mt-1">
+              <input
+                value={username}
+                onChange={(e) => { setUsername(e.target.value); setUsernameCheck(null); }}
+                placeholder="아이디 입력"
+                className="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm jamul-focus"
+                style={{ borderColor: 'var(--border)' }}
+              />
+              {mode === 'signup' && (
+                <button
+                  type="button"
+                  onClick={runUsernameCheck}
+                  disabled={checkingUsername}
+                  className="shrink-0 border rounded-lg px-3 py-2 text-sm font-medium jamul-focus"
+                  style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+                >
+                  {checkingUsername ? '확인 중...' : '중복확인'}
+                </button>
+              )}
+            </div>
+            {mode === 'signup' && usernameCheck && (
+              <p className="text-xs mt-1" style={{ color: usernameCheck.ok ? 'var(--success)' : 'var(--danger)' }}>
+                {usernameCheck.message}
+              </p>
+            )}
           </div>
           {mode === 'signup' && (
             <div>
@@ -682,6 +786,29 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
                 className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
                 style={{ borderColor: 'var(--border)' }}
               />
+            </div>
+          )}
+          {mode === 'signup' && (
+            <div>
+              <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>등록 제대</label>
+              <div className="flex gap-2 mt-1">
+                {MGMT_UNITS.map((u) => (
+                  <button
+                    key={u}
+                    type="button"
+                    onClick={() => setMgmtUnit(u)}
+                    className="flex-1 rounded-lg border py-2 text-sm font-medium jamul-focus"
+                    style={{
+                      borderColor: mgmtUnit === u ? 'var(--accent)' : 'var(--border)',
+                      background: mgmtUnit === u ? 'var(--accent)' : 'transparent',
+                      color: mgmtUnit === u ? '#fff' : 'var(--ink-soft)',
+                    }}
+                  >
+                    {u}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs mt-1" style={{ color: 'var(--ink-soft)' }}>등록 후에는 소속 중대의 데이터만 볼 수 있습니다.</p>
             </div>
           )}
           {(mode === 'signup' || mode === 'recover') && (
@@ -2524,8 +2651,24 @@ function AdminEditModal({ target, adminActions, onClose }) {
   const [militaryId, setMilitaryId] = useState(target.militaryId || '');
   const [birthDate, setBirthDate] = useState(target.birthDate || '');
   const [submitting, setSubmitting] = useState(false);
+  const [usernameCheck, setUsernameCheck] = useState(null);
+  const [checkingUsername, setCheckingUsername] = useState(false);
+
+  // 아이디를 실제로 바꿨을 때만 중복확인을 요구합니다.
+  const usernameChanged = username.trim() !== (target.username || '');
+
+  const runUsernameCheck = async () => {
+    setCheckingUsername(true);
+    const result = await checkUsernameAvailable(username, target.id);
+    setCheckingUsername(false);
+    setUsernameCheck(result);
+  };
 
   const submit = async () => {
+    if (usernameChanged && !usernameCheck?.ok) {
+      setUsernameCheck({ ok: false, message: '아이디를 변경하려면 중복확인을 해주세요.' });
+      return;
+    }
     setSubmitting(true);
     const ok = await adminActions.adminUpdateAccount(target.id, { username, name, militaryId, birthDate });
     setSubmitting(false);
@@ -2537,7 +2680,28 @@ function AdminEditModal({ target, adminActions, onClose }) {
       <div className="space-y-3">
         <div>
           <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>아이디</label>
-          <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          <div className="flex gap-2 mt-1">
+            <input
+              value={username}
+              onChange={(e) => { setUsername(e.target.value); setUsernameCheck(null); }}
+              className="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm jamul-focus"
+              style={{ borderColor: 'var(--border)' }}
+            />
+            <button
+              type="button"
+              onClick={runUsernameCheck}
+              disabled={checkingUsername}
+              className="shrink-0 border rounded-lg px-3 py-2 text-sm font-medium jamul-focus"
+              style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+            >
+              {checkingUsername ? '확인 중...' : '중복확인'}
+            </button>
+          </div>
+          {usernameCheck && (
+            <p className="text-xs mt-1" style={{ color: usernameCheck.ok ? 'var(--success)' : 'var(--danger)' }}>
+              {usernameCheck.message}
+            </p>
+          )}
         </div>
         <div>
           <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>이름</label>
@@ -2704,9 +2868,7 @@ function AdminsView({ state, currentAdmin, adminActions, setConfirmState }) {
 /* ---------------------------------------------------------------
  * 개인정보 (내 계정)
  * ------------------------------------------------------------- */
-function MyAccountView({ currentAdmin, currentUserId, isAdmin, state, onChangePassword, onUpdateProfile }) {
-  const me = state.admins.find((a) => a.id === currentUserId);
-
+function MyAccountView({ currentAdmin, currentUserId, isAdmin, me, onChangePassword, onUpdateProfile }) {
   const [username, setUsername] = useState(me?.username || '');
   const [name, setName] = useState(me?.name || '');
   const [militaryId, setMilitaryId] = useState(me?.militaryId || '');
@@ -2714,6 +2876,19 @@ function MyAccountView({ currentAdmin, currentUserId, isAdmin, state, onChangePa
   const [profileError, setProfileError] = useState('');
   const [profileNotice, setProfileNotice] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
+  const [usernameCheck, setUsernameCheck] = useState(null);
+  const [checkingUsername, setCheckingUsername] = useState(false);
+
+  // 아이디를 실제로 바꿨을 때만 중복확인을 요구합니다.
+  const usernameChanged = username.trim() !== (me?.username || '');
+
+  const runUsernameCheck = async () => {
+    setProfileError('');
+    setCheckingUsername(true);
+    const result = await checkUsernameAvailable(username, currentUserId);
+    setCheckingUsername(false);
+    setUsernameCheck(result);
+  };
 
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -2724,10 +2899,12 @@ function MyAccountView({ currentAdmin, currentUserId, isAdmin, state, onChangePa
   const saveProfile = async () => {
     setProfileError('');
     setProfileNotice('');
+    if (usernameChanged && !usernameCheck?.ok) { setProfileError('아이디를 변경하려면 중복확인을 해주세요.'); return; }
     setSavingProfile(true);
     const result = await onUpdateProfile({ username, name, militaryId, birthDate });
     setSavingProfile(false);
     if (!result.ok) { setProfileError(result.message); return; }
+    setUsernameCheck(null);
     setProfileNotice('정보가 수정되었습니다.');
   };
 
@@ -2752,14 +2929,37 @@ function MyAccountView({ currentAdmin, currentUserId, isAdmin, state, onChangePa
           <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0" style={{ background: 'var(--accent)' }}>{currentAdmin?.[0]}</span>
           <div>
             <p className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{currentAdmin}</p>
-            <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>{isAdmin ? '관리자' : '일반 사용자'}</p>
+            <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>
+              {me?.mgmtUnit || '-'} · {isAdmin ? '관리자' : '일반 사용자'}{me?.isSuper ? ' (최고 관리자)' : ''}
+            </p>
           </div>
         </div>
         <h3 className="text-sm font-bold mb-3" style={{ color: 'var(--ink)' }}>내 정보 수정</h3>
         <div className="space-y-3">
           <div>
             <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>아이디</label>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+            <div className="flex gap-2 mt-1">
+              <input
+                value={username}
+                onChange={(e) => { setUsername(e.target.value); setUsernameCheck(null); }}
+                className="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm jamul-focus"
+                style={{ borderColor: 'var(--border)' }}
+              />
+              <button
+                type="button"
+                onClick={runUsernameCheck}
+                disabled={checkingUsername}
+                className="shrink-0 border rounded-lg px-3 py-2 text-sm font-medium jamul-focus"
+                style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+              >
+                {checkingUsername ? '확인 중...' : '중복확인'}
+              </button>
+            </div>
+            {usernameCheck && (
+              <p className="text-xs mt-1" style={{ color: usernameCheck.ok ? 'var(--success)' : 'var(--danger)' }}>
+                {usernameCheck.message}
+              </p>
+            )}
           </div>
           <div>
             <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>이름</label>
@@ -2843,6 +3043,8 @@ export default function App() {
   const [currentAdmin, setCurrentAdminState] = useState(null);
   const [currentRole, setCurrentRole] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
+  const [myProfile, setMyProfile] = useState(null);
+  const [activeUnit, setActiveUnit] = useState(MGMT_UNITS[0]);
   const [adminReady, setAdminReady] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [toast, setToast] = useState(null);
@@ -2858,7 +3060,7 @@ export default function App() {
     setState(next);
     setSaving(true);
     try {
-      await saveState(next);
+      await saveState(next, activeUnit);
     } catch (e) {
       console.error('Supabase 저장 실패:', e);
       showToast('저장에 실패했습니다. Supabase 연결을 확인해주세요.', 'danger');
@@ -2870,7 +3072,7 @@ export default function App() {
   const refresh = async () => {
     setLoading(true);
     try {
-      const loaded = await loadState();
+      const loaded = await loadState(activeUnit);
       setState(loaded);
       showToast('최신 데이터로 갱신했습니다.');
     } catch (e) {
@@ -2886,24 +3088,29 @@ export default function App() {
       setCurrentAdminState(null);
       setCurrentRole(null);
       setCurrentUserId(null);
+      setMyProfile(null);
       setState(defaultState());
       return;
     }
     const name = user.user_metadata?.name || null;
     try {
-      const { data: profile, error: profErr } = await supabase.from('admins').select('*').eq('id', user.id).maybeSingle();
-      if (profErr || !profile || profile.status !== 'active') {
+      const profile = await loadMyProfile(user.id);
+      if (!profile || profile.status !== 'active') {
         await supabase.auth.signOut();
         setCurrentAdminState(null);
         setCurrentRole(null);
         setCurrentUserId(null);
+        setMyProfile(null);
         setState(defaultState());
         return;
       }
-      setCurrentAdminState(name);
+      setCurrentAdminState(profile.name || name);
       setCurrentRole(profile.role || 'user');
       setCurrentUserId(user.id);
-      const loaded = await loadState();
+      setMyProfile(profile);
+      const unit = MGMT_UNITS.includes(profile.mgmtUnit) ? profile.mgmtUnit : MGMT_UNITS[0];
+      setActiveUnit(unit);
+      const loaded = await loadState(unit);
       setState(loaded);
     } catch (e) {
       console.error('데이터를 불러오지 못했습니다:', e);
@@ -2924,6 +3131,26 @@ export default function App() {
     return () => { mounted = false; listener.subscription.unsubscribe(); };
   }, []);
 
+  // 최고 관리자만 두 중대를 오갈 수 있습니다.
+  const switchUnit = async (unit) => {
+    if (!MGMT_UNITS.includes(unit) || unit === activeUnit) return;
+    if (!isSuperAdmin && unit !== myProfile?.mgmtUnit) {
+      showToast('소속 중대의 데이터만 볼 수 있습니다.', 'danger');
+      return;
+    }
+    setLoading(true);
+    setActiveUnit(unit);
+    try {
+      const loaded = await loadState(unit);
+      setState(loaded);
+      showToast(`${unit} 데이터로 전환했습니다.`);
+    } catch (e) {
+      console.error('관리부대 전환 실패:', e);
+      showToast('관리부대 전환에 실패했습니다.', 'danger');
+    }
+    setLoading(false);
+  };
+
   const loginAs = async (username, password) => {
     const trimmed = (username || '').trim();
     if (!trimmed || !password) return { ok: false, message: '아이디와 비밀번호를 입력해주세요.' };
@@ -2941,14 +3168,21 @@ export default function App() {
     return { ok: true };
   };
 
-  const signUpAdmin = async (username, name, password, militaryId, birthDate) => {
+  const signUpAdmin = async (username, name, password, militaryId, birthDate, mgmtUnit) => {
     const trimmedUsername = (username || '').trim();
     const trimmedName = (name || '').trim();
     const trimmedMilId = (militaryId || '').trim();
     if (!trimmedUsername || !trimmedName || !password) return { ok: false, message: '아이디, 이름, 비밀번호를 입력해주세요.' };
+    const usernameError = validateUsername(trimmedUsername);
+    if (usernameError) return { ok: false, message: usernameError };
+    if (!MGMT_UNITS.includes(mgmtUnit)) return { ok: false, message: '등록할 제대를 선택해주세요.' };
     if (password.length < 6) return { ok: false, message: '비밀번호는 6자 이상이어야 합니다.' };
     if (!trimmedMilId || !birthDate) return { ok: false, message: '군번과 생년월일을 입력해주세요.' };
-    const noActiveAdmin = !state.admins.some((a) => a.role === 'admin' && a.status === 'active');
+    // 로그인 전에는 state.admins 가 비어 있어서 클라이언트 상태로는 판단할 수 없습니다.
+    // (예전에는 항상 "관리자 없음"으로 판정해 admin/active 로 등록을 시도하다가
+    //  RLS 정책에 막혀 신규 등록이 전부 실패했습니다.) DB 에 직접 물어봅니다.
+    const { data: noActiveAdmin, error: bootErr } = await supabase.rpc('no_active_admin_exists');
+    if (bootErr) return { ok: false, message: `등록에 실패했습니다: ${bootErr.message}` };
     const role = noActiveAdmin ? 'admin' : 'user';
     const status = noActiveAdmin ? 'active' : 'pending';
     const { data, error } = await supabase.auth.signUp({
@@ -2962,13 +3196,15 @@ export default function App() {
     }
     const userId = data.user?.id;
     if (!userId) return { ok: false, message: '등록에 실패했습니다. 다시 시도해주세요.' };
-    const { error: insErr } = await supabase.from('admins').insert({ id: userId, name: trimmedName, username: trimmedUsername, role, status });
+    const { error: insErr } = await supabase.from('admins').insert({ id: userId, name: trimmedName, username: trimmedUsername, role, status, mgmt_unit: mgmtUnit });
     if (insErr) {
       return { ok: false, message: `등록에 실패했습니다: ${insErr.message}` };
     }
-    const { error: secErr } = await supabase.from('admin_secrets').insert({ id: userId, military_id: trimmedMilId, birth_date: birthDate });
+    const { error: secErr } = await supabase.from('admin_secrets').upsert({ id: userId, military_id: trimmedMilId, birth_date: birthDate });
     if (secErr) {
       console.error('본인확인 정보 저장 실패:', secErr);
+      await supabase.auth.signOut();
+      return { ok: false, message: '계정은 만들어졌지만 군번·생년월일 저장에 실패했습니다. 로그인 후 [개인정보]에서 다시 저장해주세요.' };
     }
     if (!data.session) {
       return { ok: false, message: '등록되었습니다. 관리자에게 이메일 인증(Confirm email) 설정을 꺼달라고 요청해주세요.' };
@@ -3008,6 +3244,8 @@ export default function App() {
     const trimmedName = (name || '').trim();
     const trimmedMilId = (militaryId || '').trim();
     if (!trimmedUsername || !trimmedName || !trimmedMilId || !birthDate) return { ok: false, message: '모든 항목을 입력해주세요.' };
+    const usernameError = validateUsername(trimmedUsername);
+    if (usernameError) return { ok: false, message: usernameError };
     const newEmail = usernameToEmail(trimmedUsername);
     const { data, error } = await supabase.rpc('update_own_profile', {
       p_new_username: trimmedUsername,
@@ -3022,6 +3260,7 @@ export default function App() {
     }
     if (!data) return { ok: false, message: '수정에 실패했습니다.' };
     setCurrentAdminState(trimmedName);
+    setMyProfile((prev) => (prev ? { ...prev, name: trimmedName, username: trimmedUsername, militaryId: trimmedMilId, birthDate } : prev));
     setState((prev) => ({
       ...prev,
       admins: prev.admins.map((a) => (a.id === currentUserId ? { ...a, name: trimmedName, username: trimmedUsername, militaryId: trimmedMilId, birthDate } : a)),
@@ -3070,6 +3309,8 @@ export default function App() {
       const trimmedName = (name || '').trim();
       const trimmedMilId = (militaryId || '').trim();
       if (!trimmedUsername || !trimmedName || !trimmedMilId || !birthDate) { showToast('모든 항목을 입력해주세요.', 'danger'); return false; }
+      const usernameError = validateUsername(trimmedUsername);
+      if (usernameError) { showToast(usernameError, 'danger'); return false; }
       const newEmail = usernameToEmail(trimmedUsername);
       const { data, error } = await supabase.rpc('admin_update_account', {
         p_target_id: id,
@@ -3425,6 +3666,7 @@ export default function App() {
   }
 
   const isAdmin = currentRole === 'admin';
+  const isSuperAdmin = isAdmin && !!myProfile?.isSuper;
   const safeActiveTab = (activeTab === 'admins' && !isAdmin) ? 'dashboard' : activeTab;
 
   return (
@@ -3440,7 +3682,17 @@ export default function App() {
         isAdmin={isAdmin}
       />
       <div className="flex-1 flex flex-col min-w-0">
-        <Topbar activeTab={safeActiveTab} currentAdmin={currentAdmin} isAdmin={isAdmin} saving={saving} onRefresh={refresh} onSwitch={switchAdmin} />
+        <Topbar
+          activeTab={safeActiveTab}
+          currentAdmin={currentAdmin}
+          isAdmin={isAdmin}
+          saving={saving}
+          onRefresh={refresh}
+          onSwitch={switchAdmin}
+          activeUnit={activeUnit}
+          canSwitchUnit={isSuperAdmin}
+          onSwitchUnit={switchUnit}
+        />
         <main className="flex-1 overflow-y-auto jamul-scrollbar p-6">
           {safeActiveTab === 'dashboard' && <DashboardView state={state} calc={calc} setActiveTab={setActiveTab} />}
           {safeActiveTab === 'inventory' && <InventoryView state={state} calc={calc} actions={actions} />}
@@ -3452,7 +3704,7 @@ export default function App() {
           {safeActiveTab === 'disposal' && <DisposalView state={state} calc={calc} actions={actions} setConfirmState={setConfirmState} />}
           {safeActiveTab === 'log' && <LogView state={state} />}
           {safeActiveTab === 'admins' && isAdmin && <AdminsView state={state} currentAdmin={currentAdmin} adminActions={adminActions} setConfirmState={setConfirmState} />}
-          {safeActiveTab === 'account' && <MyAccountView currentAdmin={currentAdmin} currentUserId={currentUserId} isAdmin={isAdmin} state={state} onChangePassword={changeOwnPassword} onUpdateProfile={updateOwnProfile} />}
+          {safeActiveTab === 'account' && <MyAccountView currentAdmin={currentAdmin} currentUserId={currentUserId} isAdmin={isAdmin} me={myProfile} onChangePassword={changeOwnPassword} onUpdateProfile={updateOwnProfile} />}
         </main>
       </div>
       <Toast toast={toast} />
