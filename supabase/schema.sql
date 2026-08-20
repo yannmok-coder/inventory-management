@@ -245,51 +245,23 @@ create policy "insert own - admins" on admins for insert with check (
 create policy "admin update - admins" on admins for update using (is_admin()) with check (is_admin());
 create policy "admin delete - admins" on admins for delete using (is_admin());
 
--- 나머지 업무 테이블: 조회는 로그인한 누구나, 추가/수정/삭제는 승인된 관리자만
-create policy "read - warehouses" on warehouses for select using (auth.role() = 'authenticated');
-create policy "admin write - warehouses" on warehouses for insert with check (is_admin());
-create policy "admin update - warehouses" on warehouses for update using (is_admin()) with check (is_admin());
-create policy "admin delete - warehouses" on warehouses for delete using (is_admin());
+-- 나머지 업무 테이블(warehouses·shelves·items·stock·persons·holdings·
+-- disposals·maintenance·movement_log)의 정책은 아래 "관리부대(중대)별 데이터
+-- 분리" 섹션에서 mgmt_unit 을 포함해 한꺼번에 만듭니다.
 
-create policy "read - shelves" on shelves for select using (auth.role() = 'authenticated');
-create policy "admin write - shelves" on shelves for insert with check (is_admin());
-create policy "admin update - shelves" on shelves for update using (is_admin()) with check (is_admin());
-create policy "admin delete - shelves" on shelves for delete using (is_admin());
-
-create policy "read - items" on items for select using (auth.role() = 'authenticated');
-create policy "admin write - items" on items for insert with check (is_admin());
-create policy "admin update - items" on items for update using (is_admin()) with check (is_admin());
-create policy "admin delete - items" on items for delete using (is_admin());
-
-create policy "read - stock" on stock for select using (auth.role() = 'authenticated');
-create policy "admin write - stock" on stock for insert with check (is_admin());
-create policy "admin update - stock" on stock for update using (is_admin()) with check (is_admin());
-create policy "admin delete - stock" on stock for delete using (is_admin());
-
-create policy "read - persons" on persons for select using (auth.role() = 'authenticated');
-create policy "admin write - persons" on persons for insert with check (is_admin());
-create policy "admin update - persons" on persons for update using (is_admin()) with check (is_admin());
-create policy "admin delete - persons" on persons for delete using (is_admin());
-
-create policy "read - holdings" on holdings for select using (auth.role() = 'authenticated');
-create policy "admin write - holdings" on holdings for insert with check (is_admin());
-create policy "admin update - holdings" on holdings for update using (is_admin()) with check (is_admin());
-create policy "admin delete - holdings" on holdings for delete using (is_admin());
-
-create policy "read - disposals" on disposals for select using (auth.role() = 'authenticated');
-create policy "admin write - disposals" on disposals for insert with check (is_admin());
-create policy "admin update - disposals" on disposals for update using (is_admin()) with check (is_admin());
-create policy "admin delete - disposals" on disposals for delete using (is_admin());
-
-create policy "read - maintenance" on maintenance for select using (auth.role() = 'authenticated');
-create policy "admin write - maintenance" on maintenance for insert with check (is_admin());
-create policy "admin update - maintenance" on maintenance for update using (is_admin()) with check (is_admin());
-create policy "admin delete - maintenance" on maintenance for delete using (is_admin());
-
-create policy "read - movement_log" on movement_log for select using (auth.role() = 'authenticated');
-create policy "admin write - movement_log" on movement_log for insert with check (is_admin());
-create policy "admin update - movement_log" on movement_log for update using (is_admin()) with check (is_admin());
-create policy "admin delete - movement_log" on movement_log for delete using (is_admin());
+-- 예전 버전에서 남아 있을 수 있는 전체 허용 정책 제거.
+-- RLS 정책은 OR 로 합쳐지기 때문에 이게 남아 있으면 로그인한 누구나 모든 중대의
+-- 데이터를 읽고 쓸 수 있어서, 아래의 중대 분리·관리자 제한이 전부 무의미해집니다.
+do $$
+declare t text;
+begin
+  foreach t in array array['admins','warehouses','shelves','items','stock','persons',
+                           'holdings','disposals','maintenance','movement_log'] loop
+    execute format('drop policy if exists %I on %I', 'authenticated full access - ' || t, t);
+    execute format('drop policy if exists %I on %I', 'authenticated full access - ' || t || ' v2', t);
+    execute format('drop policy if exists %I on %I', 'allow all - ' || t, t);
+  end loop;
+end $$;
 
 -- ---------------------------------------------------------------
 -- 계정: 아이디(username) · 본인확인 정보(군번 · 생년월일)
@@ -302,6 +274,19 @@ alter table admins add column if not exists username text;
 -- 예전 계정들은 제외합니다.
 create unique index if not exists idx_admins_username_unique
   on admins (lower(username)) where username is not null;
+
+-- 아이디 규칙: 영문·숫자 3~20자, 'admin' / 'root' 포함 금지.
+-- 앱에서도 같은 규칙으로 막지만, DB 에서도 강제해서 우회할 수 없게 합니다.
+create or replace function is_valid_username(p_username text)
+returns boolean language sql immutable as $$
+  select p_username ~ '^[A-Za-z0-9]{3,20}$'
+     and p_username !~* 'admin'
+     and p_username !~* 'root';
+$$;
+
+alter table admins drop constraint if exists admins_username_chk;
+alter table admins add constraint admins_username_chk
+  check (username is null or is_valid_username(username));
 
 -- 비밀번호 찾기용 본인확인 정보. admins 와 분리해서 보관하고,
 -- 본인 또는 승인된 관리자만 조회할 수 있게 합니다.
@@ -388,6 +373,10 @@ begin
     return false;
   end if;
 
+  if not is_valid_username(p_new_username) then
+    raise exception '아이디는 영문·숫자 3~20자만 가능하며 admin, root 를 포함할 수 없습니다';
+  end if;
+
   if is_username_taken(p_new_username, v_id) then
     raise exception 'duplicate username' using errcode = '23505';
   end if;
@@ -410,7 +399,9 @@ end;
 $$;
 
 -- ---------------------------------------------------------------
--- 관리자가 다른 계정 정보를 수정 (위와 같은 upsert 수정)
+-- 관리자가 다른 계정 정보를 수정
+-- (아래 "관리부대(중대)별 데이터 분리" 섹션에서 같은 중대인지 확인하도록
+--  다시 정의합니다. 여기 정의는 그 전 단계용입니다.)
 -- ---------------------------------------------------------------
 create or replace function admin_update_account(
   p_target_id text,
@@ -492,6 +483,188 @@ begin
 end;
 $$;
 
+-- ---------------------------------------------------------------
+-- 관리부대(중대)별 데이터 분리
+-- 모든 업무 테이블에 mgmt_unit 컬럼을 두고 RLS 로 소속 중대의 행만
+-- 보이도록 합니다. 기존 데이터는 전부 '3중대' 로 귀속됩니다.
+-- (items 테이블에는 이미 단위를 뜻하는 unit 컬럼이 있어서
+--  부대 컬럼 이름은 mgmt_unit 을 씁니다.)
+-- ---------------------------------------------------------------
+alter table admins add column if not exists mgmt_unit text not null default '3중대';
+-- 최고 관리자: 두 중대를 모두 보고 관리할 수 있는 단 한 명
+alter table admins add column if not exists is_super boolean not null default false;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['admins','warehouses','shelves','items','stock','persons',
+                           'holdings','disposals','maintenance','movement_log'] loop
+    execute format('alter table %I add column if not exists mgmt_unit text not null default %L', t, '3중대');
+    execute format('create index if not exists %I on %I (mgmt_unit)', 'idx_' || t || '_mgmt_unit', t);
+    execute format('alter table %I drop constraint if exists %I', t, t || '_mgmt_unit_chk');
+    execute format('alter table %I add constraint %I check (mgmt_unit in (%L, %L))',
+                   t, t || '_mgmt_unit_chk', '3중대', '5중대');
+  end loop;
+end $$;
+
+-- ---------------------------------------------------------------
+-- 접근 권한 헬퍼
+-- ---------------------------------------------------------------
+create or replace function my_mgmt_unit()
+returns text language sql stable security definer set search_path = public as $$
+  select a.mgmt_unit from admins a where a.id = auth.uid()::text and a.status = 'active';
+$$;
+
+create or replace function admin_unit_of(p_id text)
+returns text language sql stable security definer set search_path = public as $$
+  select a.mgmt_unit from admins a where a.id = p_id;
+$$;
+
+-- 최고 관리자만 두 중대를 모두 볼 수 있습니다.
+create or replace function is_super_admin()
+returns boolean language sql stable security definer set search_path = public as $$
+  select coalesce((
+    select a.is_super and a.role = 'admin' and a.status = 'active'
+    from admins a where a.id = auth.uid()::text
+  ), false);
+$$;
+
+-- 조회 권한: 최고 관리자이거나, 내 소속 중대와 같을 때
+create or replace function can_access_unit(p_unit text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select is_super_admin() or p_unit = my_mgmt_unit();
+$$;
+
+-- 쓰기 권한: 해당 중대의 승인된 관리자 (최고 관리자는 모든 중대)
+create or replace function is_admin_of(p_unit text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from admins me
+    where me.id = auth.uid()::text
+      and me.role = 'admin'
+      and me.status = 'active'
+      and (me.is_super or me.mgmt_unit = p_unit)
+  );
+$$;
+
+-- ---------------------------------------------------------------
+-- 업무 테이블 RLS: 조회는 접근 가능한 중대만, 쓰기는 그 중대의 관리자만
+-- ---------------------------------------------------------------
+do $$
+declare t text;
+begin
+  foreach t in array array['warehouses','shelves','items','stock','persons',
+                           'holdings','disposals','maintenance','movement_log'] loop
+    execute format('drop policy if exists %I on %I', 'read - ' || t, t);
+    execute format('drop policy if exists %I on %I', 'admin write - ' || t, t);
+    execute format('drop policy if exists %I on %I', 'admin update - ' || t, t);
+    execute format('drop policy if exists %I on %I', 'admin delete - ' || t, t);
+
+    execute format($f$create policy %I on %I for select
+      using (auth.role() = 'authenticated' and can_access_unit(mgmt_unit))$f$, 'read - ' || t, t);
+    execute format($f$create policy %I on %I for insert
+      with check (is_admin_of(mgmt_unit))$f$, 'admin write - ' || t, t);
+    execute format($f$create policy %I on %I for update
+      using (is_admin_of(mgmt_unit)) with check (is_admin_of(mgmt_unit))$f$, 'admin update - ' || t, t);
+    execute format($f$create policy %I on %I for delete
+      using (is_admin_of(mgmt_unit))$f$, 'admin delete - ' || t, t);
+  end loop;
+end $$;
+
+-- ---------------------------------------------------------------
+-- admins RLS
+-- 조회: 본인 계정 + 접근 가능한 중대의 계정
+-- 등록: 본인 id 로만, 승인 대기 상태로 (활성 관리자가 아무도 없을 때만 예외)
+-- 수정/삭제: 그 계정이 속한 중대의 관리자만.
+--   is_super 를 켜는 것은 최고 관리자만 가능합니다.
+-- ---------------------------------------------------------------
+drop policy if exists "read - admins" on admins;
+drop policy if exists "insert own - admins" on admins;
+drop policy if exists "admin update - admins" on admins;
+drop policy if exists "admin delete - admins" on admins;
+
+create policy "read - admins" on admins for select using (
+  auth.role() = 'authenticated'
+  and (auth.uid()::text = id or can_access_unit(mgmt_unit))
+);
+create policy "insert own - admins" on admins for insert with check (
+  auth.uid()::text = id
+  and (
+    (role = 'user' and status = 'pending' and is_super = false)
+    or (role = 'admin' and status = 'active' and is_super = false and no_active_admin_exists())
+  )
+);
+create policy "admin update - admins" on admins for update
+  using (is_admin_of(mgmt_unit))
+  with check (is_admin_of(mgmt_unit) and (is_super = false or is_super_admin()));
+create policy "admin delete - admins" on admins for delete using (is_admin_of(mgmt_unit));
+
+-- admin_secrets 도 같은 중대의 관리자까지만
+drop policy if exists "select own or admin - admin_secrets" on admin_secrets;
+create policy "select own or admin - admin_secrets" on admin_secrets for select
+  using (auth.uid()::text = id or is_admin_of(admin_unit_of(id)));
+
+-- 관리자가 다른 계정을 수정할 때도 같은 중대인지 확인
+create or replace function admin_update_account(
+  p_target_id text,
+  p_new_username text,
+  p_new_email text,
+  p_new_name text,
+  p_new_military_id text,
+  p_new_birth_date date
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, auth, extensions
+as $$
+begin
+  if not is_admin_of(admin_unit_of(p_target_id)) then
+    return false;
+  end if;
+
+  if not is_valid_username(p_new_username) then
+    raise exception '아이디는 영문·숫자 3~20자만 가능하며 admin, root 를 포함할 수 없습니다';
+  end if;
+
+  if is_username_taken(p_new_username, p_target_id) then
+    raise exception 'duplicate username' using errcode = '23505';
+  end if;
+
+  update admins set name = p_new_name, username = p_new_username where id = p_target_id;
+  if not found then
+    return false;
+  end if;
+
+  insert into admin_secrets (id, military_id, birth_date)
+  values (p_target_id, p_new_military_id, p_new_birth_date)
+  on conflict (id) do update
+    set military_id = excluded.military_id,
+        birth_date = excluded.birth_date;
+
+  update auth.users set email = p_new_email, updated_at = now() where id = p_target_id::uuid;
+
+  return true;
+end;
+$$;
+
+-- ---------------------------------------------------------------
+-- 최고 관리자 지정 (두 중대를 모두 볼 수 있는 단 한 명)
+-- ---------------------------------------------------------------
+update admins set is_super = true
+where username = 'hojin0308' and role = 'admin' and status = 'active';
+
+-- ---------------------------------------------------------------
+-- 5중대 품목 초기화
+-- 3중대에 등록된 품목을 그대로 5중대에도 등록하되, 재산수량은 0 으로.
+-- 5중대 품목이 이미 하나라도 있으면 아무 것도 하지 않습니다(재실행 안전).
+-- ---------------------------------------------------------------
+insert into items (id, name, size, unit, property_qty, season, part, mgmt_unit)
+select 'item_' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 16),
+       i.name, i.size, i.unit, 0, i.season, i.part, '5중대'
+from items i
+where i.mgmt_unit = '3중대'
+  and not exists (select 1 from items x where x.mgmt_unit = '5중대');
 -- ---------------------------------------------------------------
 -- ⚠️ 꼭 해야 하는 설정: 이메일 인증(Confirm email) 끄기
 -- 이 앱은 실제 이메일이 아니라 "이름"으로 가입/로그인하도록 만들어져 있어서,
