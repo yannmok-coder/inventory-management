@@ -163,9 +163,10 @@ const mapLogToDb = (l) => ({ id: l.id, type: l.type, date: l.date, item_name: l.
 
 async function loadState() {
   const [
-    admins, warehouses, shelves, items, stock, persons, holdings, disposals, maintenance, log,
+    admins, adminSecrets, warehouses, shelves, items, stock, persons, holdings, disposals, maintenance, log,
   ] = await Promise.all([
     supabase.from('admins').select('*'),
+    supabase.from('admin_secrets').select('*'),
     supabase.from('warehouses').select('*'),
     supabase.from('shelves').select('*'),
     supabase.from('items').select('*'),
@@ -176,7 +177,7 @@ async function loadState() {
     supabase.from('maintenance').select('*'),
     supabase.from('movement_log').select('*'),
   ]);
-  const firstError = [admins, warehouses, shelves, items, stock, persons, holdings, disposals, maintenance, log]
+  const firstError = [admins, adminSecrets, warehouses, shelves, items, stock, persons, holdings, disposals, maintenance, log]
     .map((r) => r.error).find(Boolean);
   if (firstError) throw firstError;
 
@@ -186,8 +187,11 @@ async function loadState() {
     (shelvesByWh[s.warehouseId] = shelvesByWh[s.warehouseId] || []).push({ id: s.id, name: s.name, rows: s.rows, cols: s.cols });
   });
 
+  const militaryIdById = {};
+  (adminSecrets.data || []).forEach((r) => { militaryIdById[r.id] = r.military_id; });
+
   return {
-    admins: (admins.data || []).map(mapAdminFromDb),
+    admins: (admins.data || []).map(mapAdminFromDb).map((a) => ({ ...a, militaryId: militaryIdById[a.id] || '' })),
     warehouses: (warehouses.data || []).map(mapWarehouseFromDb).map((w) => ({ ...w, shelves: shelvesByWh[w.id] || [] })),
     items: (items.data || []).map(mapItemFromDb),
     stock: (stock.data || []).map(mapStockFromDb),
@@ -2539,79 +2543,114 @@ function AdminsView({ state, currentAdmin, adminActions, setConfirmState }) {
   return (
     <div className="space-y-4">
       {pending.length > 0 && (
-        <div className="jamul-card p-4">
-          <h3 className="text-sm font-bold mb-3 flex items-center gap-1.5" style={{ color: 'var(--ink)' }}>
-            <AlertTriangle size={14} color="var(--warning)" />관리자 등록 승인 대기 ({pending.length})
-          </h3>
-          <div className="space-y-2">
-            {pending.map((a) => (
-              <div key={a.id} className="flex items-center justify-between p-2 rounded-lg border" style={{ borderColor: 'var(--border)' }}>
-                <span className="text-sm" style={{ color: 'var(--ink)' }}>{a.name}</span>
-                <div>
-                  <button
-                    onClick={() => adminActions.approveAdmin(a.id)}
-                    className="text-xs px-2.5 py-1.5 rounded-md mr-1 text-white"
-                    style={{ background: 'var(--accent)' }}
-                  >
-                    승인
-                  </button>
-                  <button
-                    onClick={() => setConfirmState({
-                      message: `'${a.name}'님의 관리자 등록 신청을 거절하시겠습니까?`,
-                      onConfirm: () => adminActions.rejectAdmin(a.id),
-                    })}
-                    className="text-xs px-2.5 py-1.5 rounded-md"
-                    style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}
-                  >
-                    거절
-                  </button>
-                </div>
-              </div>
-            ))}
+        <div className="jamul-card overflow-x-auto">
+          <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+            <h3 className="text-sm font-bold flex items-center gap-1.5" style={{ color: 'var(--ink)' }}>
+              <AlertTriangle size={14} color="var(--warning)" />관리자 등록 승인 대기 ({pending.length})
+            </h3>
           </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left border-b" style={{ borderColor: 'var(--border)', color: 'var(--ink-soft)' }}>
+                <th className="px-4 py-3 font-medium">아이디</th>
+                <th className="px-4 py-3 font-medium">이름</th>
+                <th className="px-4 py-3 font-medium">군번</th>
+                <th className="px-4 py-3 font-medium text-right">관리</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pending.map((a) => (
+                <tr key={a.id} className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
+                  <td className="px-4 py-3 jamul-mono text-xs break-all" style={{ color: 'var(--ink-soft)' }}>{a.id}</td>
+                  <td className="px-4 py-3" style={{ color: 'var(--ink)' }}>{a.name}</td>
+                  <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{a.militaryId || '-'}</td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={() => adminActions.approveAdmin(a.id)}
+                      className="text-xs px-2.5 py-1.5 rounded-md mr-1 text-white"
+                      style={{ background: 'var(--accent)' }}
+                    >
+                      승인
+                    </button>
+                    <button
+                      onClick={() => setConfirmState({
+                        message: `'${a.name}'님의 관리자 등록 신청을 거절하시겠습니까?`,
+                        onConfirm: () => adminActions.rejectAdmin(a.id),
+                      })}
+                      className="text-xs px-2.5 py-1.5 rounded-md"
+                      style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}
+                    >
+                      거절
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
-      <div className="jamul-card p-4">
-        <h3 className="text-sm font-bold mb-3" style={{ color: 'var(--ink)' }}>등록된 사용자 ({active.length})</h3>
-        <div className="space-y-2">
-          {active.map((a) => {
-            const isMe = a.name === currentAdmin;
-            return (
-              <div key={a.id} className="flex items-center justify-between p-2 rounded-lg border" style={{ borderColor: 'var(--border)' }}>
-                <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: 'var(--accent)' }}>{a.name[0]}</span>
-                  <span className="text-sm" style={{ color: 'var(--ink)' }}>{a.name}</span>
-                  <span
-                    className="text-xs px-1.5 py-0.5 rounded-full"
-                    style={{ background: a.role === 'admin' ? 'var(--success-bg)' : 'var(--warning-bg)', color: a.role === 'admin' ? 'var(--success)' : 'var(--warning)' }}
-                  >
-                    {a.role === 'admin' ? '관리자' : '일반 사용자'}
-                  </span>
-                  {isMe && <span className="text-xs px-1.5 py-0.5 rounded-full" style={{ background: 'var(--border)', color: 'var(--ink-soft)' }}>나</span>}
-                </div>
-                {!isMe && (
-                  <div>
-                    <button
-                      onClick={() => adminActions.setAdminRole(a.id, a.role === 'admin' ? 'user' : 'admin')}
-                      className="text-xs px-2.5 py-1.5 rounded-md border mr-1"
-                      style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
-                    >
-                      {a.role === 'admin' ? '일반 사용자로 변경' : '관리자로 지정'}
-                    </button>
-                    <button
-                      onClick={() => confirmDelete(a)}
-                      className="p-1.5 rounded-md hover:bg-gray-100"
-                    >
-                      <Trash2 size={13} color="var(--danger)" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+      <div className="jamul-card overflow-x-auto">
+        <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+          <h3 className="text-sm font-bold" style={{ color: 'var(--ink)' }}>등록된 사용자 ({active.length})</h3>
         </div>
-        <p className="text-xs mt-3" style={{ color: 'var(--ink-soft)' }}>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left border-b" style={{ borderColor: 'var(--border)', color: 'var(--ink-soft)' }}>
+              <th className="px-4 py-3 font-medium">아이디</th>
+              <th className="px-4 py-3 font-medium">이름</th>
+              <th className="px-4 py-3 font-medium">군번</th>
+              <th className="px-4 py-3 font-medium">권한</th>
+              <th className="px-4 py-3 font-medium text-right">관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            {active.map((a) => {
+              const isMe = a.name === currentAdmin;
+              return (
+                <tr key={a.id} className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
+                  <td className="px-4 py-3 jamul-mono text-xs break-all" style={{ color: 'var(--ink-soft)' }}>{a.id}</td>
+                  <td className="px-4 py-3">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: 'var(--accent)' }}>{a.name[0]}</span>
+                      <span style={{ color: 'var(--ink)' }}>{a.name}</span>
+                      {isMe && <span className="text-xs px-1.5 py-0.5 rounded-full" style={{ background: 'var(--border)', color: 'var(--ink-soft)' }}>나</span>}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3" style={{ color: 'var(--ink-soft)' }}>{a.militaryId || '-'}</td>
+                  <td className="px-4 py-3">
+                    <span
+                      className="text-xs px-1.5 py-0.5 rounded-full"
+                      style={{ background: a.role === 'admin' ? 'var(--success-bg)' : 'var(--warning-bg)', color: a.role === 'admin' ? 'var(--success)' : 'var(--warning)' }}
+                    >
+                      {a.role === 'admin' ? '관리자' : '일반 사용자'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {!isMe && (
+                      <>
+                        <button
+                          onClick={() => adminActions.setAdminRole(a.id, a.role === 'admin' ? 'user' : 'admin')}
+                          className="text-xs px-2.5 py-1.5 rounded-md border inline-flex items-center gap-1 mr-1"
+                          style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
+                        >
+                          {a.role === 'admin' ? '일반 사용자로 변경' : '관리자로 지정'}
+                        </button>
+                        <button
+                          onClick={() => confirmDelete(a)}
+                          className="p-1.5 rounded-md hover:bg-gray-100"
+                        >
+                          <Trash2 size={13} color="var(--danger)" />
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="text-xs px-4 py-3" style={{ color: 'var(--ink-soft)' }}>
           새 사용자는 로그인 화면의 <b>신규 등록</b> 탭에서 이름과 비밀번호를 정해 직접 등록합니다. 관리자로 신청하면 이곳에서 승인해야 로그인할 수 있습니다.
         </p>
       </div>
@@ -2622,12 +2661,14 @@ function AdminsView({ state, currentAdmin, adminActions, setConfirmState }) {
 /* ---------------------------------------------------------------
  * 개인정보 (내 계정)
  * ------------------------------------------------------------- */
-function MyAccountView({ currentAdmin, isAdmin, onChangePassword }) {
+function MyAccountView({ currentAdmin, currentUserId, isAdmin, state, onChangePassword }) {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const me = state.admins.find((a) => a.id === currentUserId);
 
   const submit = async () => {
     setError('');
@@ -2647,11 +2688,25 @@ function MyAccountView({ currentAdmin, isAdmin, onChangePassword }) {
     <div className="space-y-4">
       <div className="jamul-card p-4">
         <h3 className="text-sm font-bold mb-1" style={{ color: 'var(--ink)' }}>내 정보</h3>
-        <div className="flex items-center gap-2 mt-3">
-          <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-white" style={{ background: 'var(--accent)' }}>{currentAdmin?.[0]}</span>
-          <div>
+        <div className="flex items-center gap-3 mt-3">
+          <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0" style={{ background: 'var(--accent)' }}>{currentAdmin?.[0]}</span>
+          <div className="space-y-1">
             <p className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{currentAdmin}</p>
             <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>{isAdmin ? '관리자' : '일반 사용자'}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
+          <div>
+            <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>아이디</p>
+            <p className="text-xs jamul-mono mt-0.5 break-all" style={{ color: 'var(--ink)' }}>{currentUserId || '-'}</p>
+          </div>
+          <div>
+            <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>이름</p>
+            <p className="text-sm mt-0.5" style={{ color: 'var(--ink)' }}>{currentAdmin || '-'}</p>
+          </div>
+          <div>
+            <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>군번</p>
+            <p className="text-sm mt-0.5" style={{ color: 'var(--ink)' }}>{me?.militaryId || '-'}</p>
           </div>
         </div>
       </div>
@@ -2710,6 +2765,7 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [currentAdmin, setCurrentAdminState] = useState(null);
   const [currentRole, setCurrentRole] = useState(null);
+  const [currentUserId, setCurrentUserId] = useState(null);
   const [adminReady, setAdminReady] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [toast, setToast] = useState(null);
@@ -2752,6 +2808,7 @@ export default function App() {
     if (!user) {
       setCurrentAdminState(null);
       setCurrentRole(null);
+      setCurrentUserId(null);
       setState(defaultState());
       return;
     }
@@ -2762,11 +2819,13 @@ export default function App() {
         await supabase.auth.signOut();
         setCurrentAdminState(null);
         setCurrentRole(null);
+        setCurrentUserId(null);
         setState(defaultState());
         return;
       }
       setCurrentAdminState(name);
       setCurrentRole(profile.role || 'user');
+      setCurrentUserId(user.id);
       const loaded = await loadState();
       setState(loaded);
     } catch (e) {
@@ -3268,7 +3327,7 @@ export default function App() {
           {safeActiveTab === 'disposal' && <DisposalView state={state} calc={calc} actions={guardedActions} setConfirmState={setConfirmState} />}
           {safeActiveTab === 'log' && <LogView state={state} />}
           {safeActiveTab === 'admins' && isAdmin && <AdminsView state={state} currentAdmin={currentAdmin} adminActions={adminActions} setConfirmState={setConfirmState} />}
-          {safeActiveTab === 'account' && <MyAccountView currentAdmin={currentAdmin} isAdmin={isAdmin} onChangePassword={changeOwnPassword} />}
+          {safeActiveTab === 'account' && <MyAccountView currentAdmin={currentAdmin} currentUserId={currentUserId} isAdmin={isAdmin} state={state} onChangePassword={changeOwnPassword} />}
         </main>
       </div>
       <Toast toast={toast} />
