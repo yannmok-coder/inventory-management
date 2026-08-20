@@ -238,8 +238,7 @@ create policy "read - admins" on admins for select using (auth.role() = 'authent
 create policy "insert own - admins" on admins for insert with check (
   auth.uid()::text = id
   and (
-    (role = 'user' and status = 'active')
-    or (role = 'admin' and status = 'pending')
+    (role = 'user' and status = 'pending')
     or (role = 'admin' and status = 'active' and no_active_admin_exists())
   )
 );
@@ -291,6 +290,207 @@ create policy "read - movement_log" on movement_log for select using (auth.role(
 create policy "admin write - movement_log" on movement_log for insert with check (is_admin());
 create policy "admin update - movement_log" on movement_log for update using (is_admin()) with check (is_admin());
 create policy "admin delete - movement_log" on movement_log for delete using (is_admin());
+
+-- ---------------------------------------------------------------
+-- 계정: 아이디(username) · 본인확인 정보(군번 · 생년월일)
+-- ---------------------------------------------------------------
+-- 로그인 아이디. auth.users 의 email 은 아이디를 hex 로 인코딩한
+-- 가짜 주소(u<hex>@jamul.local)라 사람이 읽을 수 없어서 따로 보관합니다.
+alter table admins add column if not exists username text;
+
+-- 아이디 중복 방지 (대소문자 구분 없음). username 이 비어있는
+-- 예전 계정들은 제외합니다.
+create unique index if not exists idx_admins_username_unique
+  on admins (lower(username)) where username is not null;
+
+-- 비밀번호 찾기용 본인확인 정보. admins 와 분리해서 보관하고,
+-- 본인 또는 승인된 관리자만 조회할 수 있게 합니다.
+create table if not exists admin_secrets (
+  id text primary key,
+  military_id text not null,
+  birth_date date not null
+);
+
+alter table admin_secrets enable row level security;
+
+drop policy if exists "select own or admin - admin_secrets" on admin_secrets;
+drop policy if exists "insert own - admin_secrets" on admin_secrets;
+drop policy if exists "update own - admin_secrets" on admin_secrets;
+
+create policy "select own or admin - admin_secrets" on admin_secrets for select
+  using (auth.uid()::text = id or is_admin());
+create policy "insert own - admin_secrets" on admin_secrets for insert
+  with check (auth.uid()::text = id);
+create policy "update own - admin_secrets" on admin_secrets for update
+  using (auth.uid()::text = id) with check (auth.uid()::text = id);
+
+-- ---------------------------------------------------------------
+-- 아이디 -> 가짜 이메일 변환 (앱의 usernameToEmail 과 동일한 규칙)
+-- ---------------------------------------------------------------
+create or replace function username_to_email(p_username text)
+returns text
+language sql
+immutable
+as $$
+  select 'u' || encode(convert_to(lower(trim(p_username)), 'UTF8'), 'hex') || '@jamul.local';
+$$;
+
+-- ---------------------------------------------------------------
+-- 아이디 중복확인
+-- 신규 등록 화면은 로그인 전(anon)이라 admins 를 직접 조회할 수 없으므로
+-- security definer 함수로 확인합니다. 반환값이 true 면 이미 사용중입니다.
+-- p_exclude_id 를 넘기면 그 계정(=본인)은 중복에서 제외합니다.
+-- ---------------------------------------------------------------
+create or replace function is_username_taken(p_username text, p_exclude_id text default null)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, auth
+as $$
+  select exists (
+    select 1 from admins a
+    where lower(a.username) = lower(trim(p_username))
+      and (p_exclude_id is null or a.id <> p_exclude_id)
+  ) or exists (
+    select 1 from auth.users u
+    where u.email = public.username_to_email(p_username)
+      and (p_exclude_id is null or u.id::text <> p_exclude_id)
+  );
+$$;
+
+revoke all on function is_username_taken(text, text) from public;
+grant execute on function is_username_taken(text, text) to anon, authenticated;
+
+-- ---------------------------------------------------------------
+-- 내 정보 수정
+-- ⚠️ admin_secrets 는 update 가 아니라 upsert 여야 합니다.
+--    행이 없는 계정(= 이 기능이 생기기 전에 가입한 계정)에 update 를 하면
+--    0건이 갱신되고도 성공으로 응답해서, 저장된 것처럼 보이다가
+--    다시 로그인하면 군번·생년월일이 비어있게 됩니다.
+-- ---------------------------------------------------------------
+create or replace function update_own_profile(
+  p_new_username text,
+  p_new_email text,
+  p_new_name text,
+  p_new_military_id text,
+  p_new_birth_date date
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, auth, extensions
+as $$
+declare
+  v_id text := auth.uid()::text;
+begin
+  if v_id is null then
+    return false;
+  end if;
+
+  if is_username_taken(p_new_username, v_id) then
+    raise exception 'duplicate username' using errcode = '23505';
+  end if;
+
+  update admins set name = p_new_name, username = p_new_username where id = v_id;
+  if not found then
+    return false;
+  end if;
+
+  insert into admin_secrets (id, military_id, birth_date)
+  values (v_id, p_new_military_id, p_new_birth_date)
+  on conflict (id) do update
+    set military_id = excluded.military_id,
+        birth_date = excluded.birth_date;
+
+  update auth.users set email = p_new_email, updated_at = now() where id = v_id::uuid;
+
+  return true;
+end;
+$$;
+
+-- ---------------------------------------------------------------
+-- 관리자가 다른 계정 정보를 수정 (위와 같은 upsert 수정)
+-- ---------------------------------------------------------------
+create or replace function admin_update_account(
+  p_target_id text,
+  p_new_username text,
+  p_new_email text,
+  p_new_name text,
+  p_new_military_id text,
+  p_new_birth_date date
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, auth, extensions
+as $$
+begin
+  if not is_admin() then
+    return false;
+  end if;
+
+  if is_username_taken(p_new_username, p_target_id) then
+    raise exception 'duplicate username' using errcode = '23505';
+  end if;
+
+  update admins set name = p_new_name, username = p_new_username where id = p_target_id;
+  if not found then
+    return false;
+  end if;
+
+  insert into admin_secrets (id, military_id, birth_date)
+  values (p_target_id, p_new_military_id, p_new_birth_date)
+  on conflict (id) do update
+    set military_id = excluded.military_id,
+        birth_date = excluded.birth_date;
+
+  update auth.users set email = p_new_email, updated_at = now() where id = p_target_id::uuid;
+
+  return true;
+end;
+$$;
+
+-- ---------------------------------------------------------------
+-- 비밀번호 찾기: 아이디 · 군번 · 생년월일로 본인 확인 후 재설정
+-- (crypt / gen_salt 는 pgcrypto 확장이 필요합니다)
+-- ---------------------------------------------------------------
+create extension if not exists pgcrypto with schema extensions;
+
+create or replace function verify_and_reset_password(
+  p_username text,
+  p_military_id text,
+  p_birth_date date,
+  p_new_password text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, auth, extensions
+as $$
+declare
+  v_id text;
+begin
+  select a.id into v_id
+  from admins a
+  join admin_secrets s on s.id = a.id
+  where a.username = p_username
+    and s.military_id = p_military_id
+    and s.birth_date = p_birth_date
+  limit 1;
+
+  if v_id is null then
+    return false;
+  end if;
+
+  update auth.users
+  set encrypted_password = crypt(p_new_password, gen_salt('bf')),
+      updated_at = now()
+  where id = v_id::uuid;
+
+  return true;
+end;
+$$;
 
 -- ---------------------------------------------------------------
 -- ⚠️ 꼭 해야 하는 설정: 이메일 인증(Confirm email) 끄기

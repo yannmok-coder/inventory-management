@@ -20,6 +20,23 @@ const usernameToEmail = (username) => {
   const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
   return `u${hex}@jamul.local`;
 };
+
+// 아이디 중복확인. 신규 등록 화면은 로그인 전(anon)이라 admins 테이블을 직접
+// 조회할 수 없어서, security definer 함수(is_username_taken)로 확인합니다.
+// excludeId를 넘기면 그 계정(=본인)은 중복 대상에서 제외합니다.
+const checkUsernameAvailable = async (username, excludeId = null) => {
+  const trimmed = (username || '').trim();
+  if (!trimmed) return { ok: false, message: '아이디를 입력해주세요.' };
+  if (trimmed.length < 3) return { ok: false, message: '아이디는 3자 이상 입력해주세요.' };
+  const { data, error } = await supabase.rpc('is_username_taken', {
+    p_username: trimmed,
+    p_exclude_id: excludeId,
+  });
+  if (error) return { ok: false, message: `중복확인에 실패했습니다: ${error.message}` };
+  if (data) return { ok: false, message: '이미 사용중인 아이디입니다.' };
+  return { ok: true, message: `'${trimmed}'은(는) 사용할 수 있는 아이디입니다.` };
+};
+
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const nowIso = () => new Date().toISOString();
 const fmtNum = (n) => (Number(n) || 0).toLocaleString('ko-KR');
@@ -565,6 +582,8 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [usernameCheck, setUsernameCheck] = useState(null);
+  const [checkingUsername, setCheckingUsername] = useState(false);
 
   const reset = () => {
     setError('');
@@ -574,6 +593,15 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
     setMilitaryId('');
     setBirthDate('');
     setName('');
+    setUsernameCheck(null);
+  };
+
+  const runUsernameCheck = async () => {
+    setError('');
+    setCheckingUsername(true);
+    const result = await checkUsernameAvailable(username);
+    setCheckingUsername(false);
+    setUsernameCheck(result);
   };
 
   const switchMode = (next) => {
@@ -596,6 +624,7 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
 
     if (mode === 'signup') {
       if (!username.trim() || !name.trim() || !password) { setError('아이디, 이름, 비밀번호를 입력해주세요.'); return; }
+      if (!usernameCheck?.ok) { setError('아이디 중복확인을 해주세요.'); return; }
       if (password !== confirm) { setError('비밀번호가 서로 일치하지 않습니다.'); return; }
       if (!militaryId.trim() || !birthDate) { setError('군번과 생년월일을 입력해주세요. (비밀번호를 잊었을 때 본인 확인에 사용됩니다)'); return; }
       setSubmitting(true);
@@ -664,13 +693,31 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
           )}
           <div>
             <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>아이디</label>
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="아이디 입력"
-              className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
-              style={{ borderColor: 'var(--border)' }}
-            />
+            <div className="flex gap-2 mt-1">
+              <input
+                value={username}
+                onChange={(e) => { setUsername(e.target.value); setUsernameCheck(null); }}
+                placeholder="아이디 입력"
+                className="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm jamul-focus"
+                style={{ borderColor: 'var(--border)' }}
+              />
+              {mode === 'signup' && (
+                <button
+                  type="button"
+                  onClick={runUsernameCheck}
+                  disabled={checkingUsername}
+                  className="shrink-0 border rounded-lg px-3 py-2 text-sm font-medium jamul-focus"
+                  style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+                >
+                  {checkingUsername ? '확인 중...' : '중복확인'}
+                </button>
+              )}
+            </div>
+            {mode === 'signup' && usernameCheck && (
+              <p className="text-xs mt-1" style={{ color: usernameCheck.ok ? 'var(--success)' : 'var(--danger)' }}>
+                {usernameCheck.message}
+              </p>
+            )}
           </div>
           {mode === 'signup' && (
             <div>
@@ -2714,6 +2761,19 @@ function MyAccountView({ currentAdmin, currentUserId, isAdmin, state, onChangePa
   const [profileError, setProfileError] = useState('');
   const [profileNotice, setProfileNotice] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
+  const [usernameCheck, setUsernameCheck] = useState(null);
+  const [checkingUsername, setCheckingUsername] = useState(false);
+
+  // 아이디를 실제로 바꿨을 때만 중복확인을 요구합니다.
+  const usernameChanged = username.trim() !== (me?.username || '');
+
+  const runUsernameCheck = async () => {
+    setProfileError('');
+    setCheckingUsername(true);
+    const result = await checkUsernameAvailable(username, currentUserId);
+    setCheckingUsername(false);
+    setUsernameCheck(result);
+  };
 
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -2724,10 +2784,12 @@ function MyAccountView({ currentAdmin, currentUserId, isAdmin, state, onChangePa
   const saveProfile = async () => {
     setProfileError('');
     setProfileNotice('');
+    if (usernameChanged && !usernameCheck?.ok) { setProfileError('아이디를 변경하려면 중복확인을 해주세요.'); return; }
     setSavingProfile(true);
     const result = await onUpdateProfile({ username, name, militaryId, birthDate });
     setSavingProfile(false);
     if (!result.ok) { setProfileError(result.message); return; }
+    setUsernameCheck(null);
     setProfileNotice('정보가 수정되었습니다.');
   };
 
@@ -2759,7 +2821,28 @@ function MyAccountView({ currentAdmin, currentUserId, isAdmin, state, onChangePa
         <div className="space-y-3">
           <div>
             <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>아이디</label>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+            <div className="flex gap-2 mt-1">
+              <input
+                value={username}
+                onChange={(e) => { setUsername(e.target.value); setUsernameCheck(null); }}
+                className="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm jamul-focus"
+                style={{ borderColor: 'var(--border)' }}
+              />
+              <button
+                type="button"
+                onClick={runUsernameCheck}
+                disabled={checkingUsername}
+                className="shrink-0 border rounded-lg px-3 py-2 text-sm font-medium jamul-focus"
+                style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+              >
+                {checkingUsername ? '확인 중...' : '중복확인'}
+              </button>
+            </div>
+            {usernameCheck && (
+              <p className="text-xs mt-1" style={{ color: usernameCheck.ok ? 'var(--success)' : 'var(--danger)' }}>
+                {usernameCheck.message}
+              </p>
+            )}
           </div>
           <div>
             <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>이름</label>
@@ -2966,9 +3049,11 @@ export default function App() {
     if (insErr) {
       return { ok: false, message: `등록에 실패했습니다: ${insErr.message}` };
     }
-    const { error: secErr } = await supabase.from('admin_secrets').insert({ id: userId, military_id: trimmedMilId, birth_date: birthDate });
+    const { error: secErr } = await supabase.from('admin_secrets').upsert({ id: userId, military_id: trimmedMilId, birth_date: birthDate });
     if (secErr) {
       console.error('본인확인 정보 저장 실패:', secErr);
+      await supabase.auth.signOut();
+      return { ok: false, message: '계정은 만들어졌지만 군번·생년월일 저장에 실패했습니다. 로그인 후 [개인정보]에서 다시 저장해주세요.' };
     }
     if (!data.session) {
       return { ok: false, message: '등록되었습니다. 관리자에게 이메일 인증(Confirm email) 설정을 꺼달라고 요청해주세요.' };
