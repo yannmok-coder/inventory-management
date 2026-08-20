@@ -35,8 +35,14 @@ create table if not exists items (
   unit text default '',
   property_qty integer not null default 0,
   season text default '',
-  part text default ''
+  part text default '',
+  -- 대분류: 특정물자 / 전투물자
+  category text not null default '특정물자'
 );
+alter table items add column if not exists category text not null default '특정물자';
+create index if not exists idx_items_category on items (category);
+alter table items drop constraint if exists items_category_chk;
+alter table items add constraint items_category_chk check (category in ('특정물자', '전투물자'));
 
 create table if not exists stock (
   id text primary key,
