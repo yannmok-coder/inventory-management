@@ -40,6 +40,16 @@ const validateUsername = (username) => {
   return null;
 };
 
+// 비밀번호 규칙: 영문 · 숫자 · 특수문자만. (한글·공백은 사용할 수 없습니다)
+const PASSWORD_PATTERN = /^[A-Za-z0-9!-/:-@[-`{-~]+$/;
+
+const validatePassword = (password) => {
+  if (!password) return '비밀번호를 입력해주세요.';
+  if (password.length < 6) return '비밀번호는 6자 이상이어야 합니다.';
+  if (!PASSWORD_PATTERN.test(password)) return '비밀번호는 영문, 숫자, 특수문자만 사용할 수 있습니다. (한글·공백 불가)';
+  return null;
+};
+
 // 아이디 중복확인. 신규 등록 화면은 로그인 전(anon)이라 admins 테이블을 직접
 // 조회할 수 없어서, security definer 함수(is_username_taken)로 확인합니다.
 // excludeId를 넘기면 그 계정(=본인)은 중복 대상에서 제외합니다.
@@ -525,7 +535,9 @@ const NAV_ITEMS = [
   { id: 'account', label: '개인정보', icon: KeyRound },
 ];
 
-function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle, isAdmin }) {
+// 사이드바는 열려 있을 때만 렌더링됩니다. 좁은 화면에서는 화면 위에 겹쳐 뜨고,
+// 넓은 화면에서는 본문 옆에 자리를 차지합니다.
+function Sidebar({ activeTab, setActiveTab, state, calc, onToggle, isAdmin }) {
   const deficitCount = state.items.filter((it) => calc.diff(it) < 0).length;
   const pendingDisposalCount = state.disposals.filter((d) => d.status === 'pending').length;
   const pendingMaintenanceCount = state.maintenance.filter((m) => m.status === 'pending').length;
@@ -539,37 +551,28 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle, is
   };
   const visibleNavItems = NAV_ITEMS.filter((item) => item.id !== 'admins' || isAdmin);
   return (
-    <aside className={`${collapsed ? 'w-16' : 'w-56'} shrink-0 flex flex-col transition-all`} style={{ background: 'var(--sidebar)' }}>
-      <div className={`px-3 py-5 flex items-center border-b ${collapsed ? 'justify-center' : 'justify-between gap-2'}`} style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        {collapsed ? (
-          <button
-            onClick={onToggle}
-            className="w-9 h-9 rounded-lg bg-white flex items-center justify-center shrink-0 overflow-hidden p-0.5 jamul-focus"
-            title="메뉴 펼치기"
-          >
+    <aside
+      className="w-60 shrink-0 flex flex-col fixed inset-y-0 left-0 z-40 md:static md:z-auto"
+      style={{ background: 'var(--sidebar)' }}
+    >
+      <div className="px-3 py-5 flex items-center justify-between gap-2 border-b" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-9 h-9 rounded-lg bg-white flex items-center justify-center shrink-0 overflow-hidden p-0.5">
             <img src={LOGO_DATA_URI} alt="로고" className="w-full h-full object-contain" />
-          </button>
-        ) : (
-          <>
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-9 h-9 rounded-lg bg-white flex items-center justify-center shrink-0 overflow-hidden p-0.5">
-                <img src={LOGO_DATA_URI} alt="로고" className="w-full h-full object-contain" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-bold text-white leading-tight truncate">물자관리시스템</p>
-                <p className="text-xs" style={{ color: 'var(--sidebar-text)' }}>통합 재고 관제</p>
-              </div>
-            </div>
-            <button
-              onClick={onToggle}
-              className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 jamul-focus"
-              style={{ background: 'var(--sidebar-active)' }}
-              title="메뉴 접기"
-            >
-              <Menu size={14} color="#fff" />
-            </button>
-          </>
-        )}
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-white leading-tight truncate">물자관리시스템</p>
+            <p className="text-xs" style={{ color: 'var(--sidebar-text)' }}>통합 재고 관제</p>
+          </div>
+        </div>
+        <button
+          onClick={onToggle}
+          className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 jamul-focus"
+          style={{ background: 'var(--sidebar-active)' }}
+          title="메뉴 닫기"
+        >
+          <X size={15} color="#fff" />
+        </button>
       </div>
       <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto jamul-scrollbar">
         {visibleNavItems.map((item) => {
@@ -580,13 +583,12 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle, is
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              title={collapsed ? item.label : undefined}
-              className={`relative w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors jamul-focus ${collapsed ? 'justify-center' : ''}`}
+              className="relative w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors jamul-focus"
               style={{ background: active ? 'var(--sidebar-active)' : 'transparent', color: active ? '#fff' : 'var(--sidebar-text)' }}
             >
               <Icon size={16} />
-              {!collapsed && <span className="flex-1 text-left">{item.label}</span>}
-              {!collapsed && badge > 0 && (
+              <span className="flex-1 text-left">{item.label}</span>
+              {badge > 0 && (
                 <span
                   className="jamul-mono text-xs px-1.5 py-0.5 rounded-full"
                   style={{ background: (item.id === 'disposal' || item.id === 'maintenance' || item.id === 'admins') ? 'var(--warning)' : 'var(--danger)', color: '#fff' }}
@@ -594,21 +596,13 @@ function Sidebar({ activeTab, setActiveTab, state, calc, collapsed, onToggle, is
                   {badge}
                 </span>
               )}
-              {collapsed && badge > 0 && (
-                <span
-                  className="absolute top-1 right-1 w-2 h-2 rounded-full"
-                  style={{ background: (item.id === 'disposal' || item.id === 'maintenance' || item.id === 'admins') ? 'var(--warning)' : 'var(--danger)' }}
-                />
-              )}
             </button>
           );
         })}
       </nav>
-      {!collapsed && (
-        <div className="px-4 py-3 text-xs" style={{ color: 'var(--sidebar-text)', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-          품목 {state.items.length} · 창고 {state.warehouses.length} · 인원 {state.persons.length}
-        </div>
-      )}
+      <div className="px-4 py-3 text-xs" style={{ color: 'var(--sidebar-text)', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+        품목 {state.items.length} · 창고 {state.warehouses.length} · 인원 {state.persons.length}
+      </div>
     </aside>
   );
 }
@@ -619,21 +613,32 @@ const TAB_TITLES = {
   account: '개인정보',
 };
 
-function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch, activeUnit, canSwitchUnit, onSwitchUnit }) {
+function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch, activeUnit, canSwitchUnit, onSwitchUnit, menuOpen, onToggleMenu }) {
   const otherUnit = MGMT_UNITS.find((u) => u !== activeUnit) || activeUnit;
   return (
-    <header className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
-      <div>
-        <h2 className="text-base font-bold" style={{ color: 'var(--ink)' }}>{TAB_TITLES[activeTab]}</h2>
-        <p className="text-xs jamul-mono" style={{ color: 'var(--ink-soft)' }}>{todayStr().split('-').join('.')}</p>
+    <header className="flex items-center justify-between gap-3 px-4 md:px-6 py-4 border-b shrink-0" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
+      <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1">
+        <button
+          onClick={onToggleMenu}
+          className="p-2 rounded-lg border shrink-0 jamul-focus"
+          style={{ borderColor: 'var(--border)' }}
+          title={menuOpen ? '메뉴 닫기' : '메뉴 열기'}
+          aria-label={menuOpen ? '메뉴 닫기' : '메뉴 열기'}
+        >
+          <Menu size={16} />
+        </button>
+        <div className="min-w-0">
+          <h2 className="text-base font-bold truncate" style={{ color: 'var(--ink)' }}>{TAB_TITLES[activeTab]}</h2>
+          <p className="text-xs jamul-mono truncate" style={{ color: 'var(--ink-soft)' }}>{todayStr().split('-').join('.')}</p>
+        </div>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-1.5 md:gap-3 shrink-0">
         {saving && (
-          <span className="text-xs flex items-center gap-1" style={{ color: 'var(--ink-soft)' }}>
-            <Loader2 size={12} className="animate-spin" />저장 중
+          <span className="text-xs flex items-center gap-1 shrink-0" style={{ color: 'var(--ink-soft)' }}>
+            <Loader2 size={12} className="animate-spin" /><span className="hidden sm:inline">저장 중</span>
           </span>
         )}
-        <span className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>관리부대 :</span>
+        <span className="text-xs font-medium hidden sm:inline" style={{ color: 'var(--ink-soft)' }}>관리부대 :</span>
         <button
           onClick={() => canSwitchUnit && onSwitchUnit(otherUnit)}
           disabled={!canSwitchUnit}
@@ -650,13 +655,13 @@ function Topbar({ activeTab, currentAdmin, isAdmin, saving, onRefresh, onSwitch,
         <button onClick={onRefresh} className="p-2 rounded-lg border jamul-focus" style={{ borderColor: 'var(--border)' }} title="새로고침">
           <RefreshCw size={14} />
         </button>
-        <div className="flex items-center gap-2 pl-3 border-l" style={{ borderColor: 'var(--border)' }}>
-          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: 'var(--accent)' }}>
+        <div className="flex items-center gap-1.5 md:gap-2 pl-1.5 md:pl-3 border-l" style={{ borderColor: 'var(--border)' }}>
+          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0" style={{ background: 'var(--accent)' }} title={currentAdmin || ''}>
             {currentAdmin ? currentAdmin[0] : '?'}
           </div>
-          <span className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{currentAdmin}</span>
+          <span className="text-sm font-medium hidden md:inline" style={{ color: 'var(--ink)' }}>{currentAdmin}</span>
           <span
-            className="text-xs px-1.5 py-0.5 rounded-full"
+            className="text-xs px-1.5 py-0.5 rounded-full hidden lg:inline"
             style={{ background: isAdmin ? 'var(--success-bg)' : 'var(--warning-bg)', color: isAdmin ? 'var(--success)' : 'var(--warning)' }}
           >
             {isAdmin ? '관리자' : '일반 사용자'}
@@ -957,7 +962,7 @@ function LoginGate({ onLogin, onSignup, onRecover }) {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && mode === 'login') submit(); }}
-              placeholder={mode === 'login' ? '비밀번호 입력' : '6자 이상 입력'}
+              placeholder={mode === 'login' ? '비밀번호 입력' : '영문·숫자·특수문자 6자 이상'}
               className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
               style={{ borderColor: 'var(--border)' }}
             />
@@ -2021,12 +2026,208 @@ function NewPropertyIssueModal({ state, calc, actions, onClose }) {
   );
 }
 
+// 새 불출 등록 / 재고 추가 불출 등록을 눌렀을 때 먼저 방식을 고르는 창
+function IssueModeModal({ title, onPick, onClose }) {
+  const options = [
+    { mode: 'single', label: '개인불출', desc: '한 명에게 품목을 불출합니다.', icon: UserPlus },
+    { mode: 'bulk', label: '일괄불출', desc: '품목 하나를 여러 인원에게 한 번에 불출합니다.', icon: Users },
+  ];
+  return (
+    <Modal title={title} onClose={onClose}>
+      <div className="space-y-2">
+        {options.map((o) => {
+          const Icon = o.icon;
+          return (
+            <button
+              key={o.mode}
+              onClick={() => onPick(o.mode)}
+              className="w-full flex items-center gap-3 rounded-lg border px-4 py-3 text-left jamul-focus"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <span className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--accent)' }}>
+                <Icon size={16} color="#fff" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium" style={{ color: 'var(--ink)' }}>{o.label}</span>
+                <span className="block text-xs" style={{ color: 'var(--ink-soft)' }}>{o.desc}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
+// 일괄불출: 품목을 먼저 고르고, 여러 인원을 선택해 같은 품목을 한 번에 지급합니다.
+// mode 'stock' = 창고 재고에서 불출, 'newProp' = 재산수량을 늘리며 바로 불출.
+function BulkIssueModal({ state, calc, actions, mode, onClose }) {
+  const fromStock = mode === 'stock';
+  const [itemId, setItemId] = useState('');
+  const [warehouseId, setWarehouseId] = useState('');
+  const [qtyPerPerson, setQtyPerPerson] = useState('1');
+  const [personIds, setPersonIds] = useState([]);
+  const [search, setSearch] = useState('');
+  const [reason, setReason] = useState('');
+  const [date, setDate] = useState(todayStr());
+  const [submitting, setSubmitting] = useState(false);
+
+  const warehouseOptions = fromStock && itemId ? warehousesWithStock(state, itemId) : [];
+  const avail = fromStock && itemId && warehouseId ? calc.stockAt(itemId, warehouseId) : 0;
+
+  const sortedPersons = [...state.persons].sort((a, b) => bySquad(a.dept, b.dept) || compareKo(a.name, b.name));
+  const keyword = search.trim().toLowerCase();
+  const visiblePersons = keyword
+    ? sortedPersons.filter((pp) => pp.name.toLowerCase().includes(keyword) || (pp.dept || '').toLowerCase().includes(keyword))
+    : sortedPersons;
+
+  const selected = new Set(personIds);
+  const perPerson = Number(qtyPerPerson) || 0;
+  const totalQty = perPerson * personIds.length;
+  const shortage = fromStock && warehouseId && totalQty > avail;
+
+  const togglePerson = (id) => {
+    setPersonIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+  const allVisibleSelected = visiblePersons.length > 0 && visiblePersons.every((pp) => selected.has(pp.id));
+  const toggleAllVisible = () => {
+    if (allVisibleSelected) {
+      const ids = new Set(visiblePersons.map((pp) => pp.id));
+      setPersonIds((prev) => prev.filter((x) => !ids.has(x)));
+    } else {
+      setPersonIds((prev) => Array.from(new Set([...prev, ...visiblePersons.map((pp) => pp.id)])));
+    }
+  };
+
+  const submit = async () => {
+    setSubmitting(true);
+    const payload = { personIds, itemId, qtyPerPerson: perPerson, reason, date };
+    const ok = fromStock
+      ? await actions.issueItemBulk({ ...payload, warehouseId })
+      : await actions.issueNewPropertyBulk(payload);
+    setSubmitting(false);
+    if (ok) onClose();
+  };
+
+  return (
+    <Modal title={fromStock ? '일괄불출 · 새 불출 등록' : '일괄불출 · 재고 추가 불출 등록'} onClose={onClose} wide>
+      <div className="space-y-3">
+        {!fromStock && (
+          <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--warning-bg)', color: 'var(--warning)' }}>
+            창고 재고를 거치지 않고, 품목의 재산수량을 함께 늘리면서 바로 인원에게 불출합니다.
+          </p>
+        )}
+
+        <div>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>① 품목</label>
+          <select
+            value={itemId}
+            onChange={(e) => { setItemId(e.target.value); setWarehouseId(''); }}
+            className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
+            style={{ borderColor: 'var(--border)' }}
+          >
+            <option value="">선택</option>
+            {[...state.items].sort(byItemOrder).map((it) => <option key={it.id} value={it.id}>{it.name}{itemTag(it)}</option>)}
+          </select>
+        </div>
+
+        {fromStock && (
+          <div>
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>불출할 창고</label>
+            <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
+              <option value="">선택</option>
+              {warehouseOptions.map((s2) => <option key={s2.warehouseId} value={s2.warehouseId}>{calc.whName(s2.warehouseId)} (보유 {fmtNum(s2.qty)})</option>)}
+            </select>
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>1인당 수량</label>
+            <input type="number" min="1" value={qtyPerPerson} onChange={(e) => setQtyPerPerson(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          </div>
+          <div className="flex-1">
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>불출일</label>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          </div>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>② 인원 선택 ({personIds.length}명)</label>
+            <button type="button" onClick={toggleAllVisible} className="text-xs" style={{ color: 'var(--accent)' }}>
+              {allVisibleSelected ? '전체 해제' : '전체 선택'}
+            </button>
+          </div>
+          <div className="relative mt-1">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--ink-soft)' }} />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="소속 또는 이름 검색" className="w-full pl-8 pr-3 py-2 rounded-lg border text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          </div>
+          {/* 5명 정도가 보이고, 나머지는 스크롤해서 볼 수 있는 높이 */}
+          <div className="mt-1 border rounded-lg overflow-y-auto jamul-scrollbar" style={{ borderColor: 'var(--border)', maxHeight: '220px' }}>
+            {visiblePersons.length === 0 ? (
+              <p className="text-xs px-3 py-6 text-center" style={{ color: 'var(--ink-soft)' }}>표시할 인원이 없습니다.</p>
+            ) : visiblePersons.map((pp) => {
+              const held = state.holdings.filter((h) => h.personId === pp.id).reduce((a, b) => a + b.qty, 0);
+              const on = selected.has(pp.id);
+              return (
+                <label
+                  key={pp.id}
+                  className="flex items-center gap-2 px-3 py-2 border-b last:border-0 cursor-pointer"
+                  style={{ borderColor: 'var(--border)', background: on ? 'var(--success-bg)' : 'transparent' }}
+                >
+                  <input type="checkbox" checked={on} onChange={() => togglePerson(pp.id)} className="shrink-0" />
+                  <span className="text-sm flex-1 min-w-0 truncate" style={{ color: 'var(--ink)' }}>
+                    <span style={{ color: 'var(--ink-soft)' }}>{pp.dept}</span> · {pp.name}
+                  </span>
+                  <span className="jamul-mono text-xs shrink-0" style={{ color: 'var(--ink-soft)' }}>보유 {fmtNum(held)}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>사유</label>
+          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={fromStock ? '예: 임무 수행용' : '예: 신규 지급'} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+        </div>
+
+        <div className="text-xs px-3 py-2 rounded-lg" style={{ background: shortage ? 'var(--danger-bg)' : 'var(--bg)', color: shortage ? 'var(--danger)' : 'var(--ink-soft)' }}>
+          선택 {personIds.length}명 × {fmtNum(perPerson)} = <span className="jamul-mono font-semibold">총 {fmtNum(totalQty)}</span>
+          {fromStock && warehouseId && ` (창고 보유 ${fmtNum(avail)})`}
+          {shortage && ' — 보유수량을 초과합니다.'}
+        </div>
+
+        <button
+          onClick={submit}
+          disabled={submitting || shortage || personIds.length === 0}
+          className="jamul-btn-primary w-full rounded-lg py-2.5 text-sm font-medium mt-1"
+          style={{ opacity: submitting || shortage || personIds.length === 0 ? 0.5 : 1 }}
+        >
+          {submitting ? '처리 중...' : `${personIds.length}명에게 불출 등록`}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 function IssuanceView({ state, calc, actions, showToast }) {
   const [search, setSearch] = useState('');
   const [openDept, setOpenDept] = useState(null);
   const [openPerson, setOpenPerson] = useState(null);
+  // 'stock' = 새 불출 등록, 'newProp' = 재고 추가 불출 등록
+  const [modeChooser, setModeChooser] = useState(null);
   const [showIssueModal, setShowIssueModal] = useState(false);
   const [showNewPropIssueModal, setShowNewPropIssueModal] = useState(false);
+  const [bulkMode, setBulkMode] = useState(null);
+
+  const pickIssueMode = (pick) => {
+    const source = modeChooser;
+    setModeChooser(null);
+    if (pick === 'bulk') { setBulkMode(source); return; }
+    if (source === 'stock') setShowIssueModal(true);
+    else setShowNewPropIssueModal(true);
+  };
 
   const deptMap = {};
   state.persons.forEach((p) => { (deptMap[p.dept] = deptMap[p.dept] || []).push(p); });
@@ -2043,9 +2244,9 @@ function IssuanceView({ state, calc, actions, showToast }) {
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="소속 또는 이름 검색" className="pl-8 pr-3 py-2 rounded-lg border text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => setShowIssueModal(true)} className="jamul-btn-primary rounded-lg px-4 py-2 text-sm font-medium inline-flex items-center gap-1"><Plus size={14} />새 불출 등록</button>
+          <button onClick={() => setModeChooser('stock')} className="jamul-btn-primary rounded-lg px-4 py-2 text-sm font-medium inline-flex items-center gap-1"><Plus size={14} />새 불출 등록</button>
           <button
-            onClick={() => setShowNewPropIssueModal(true)}
+            onClick={() => setModeChooser('newProp')}
             className="rounded-lg px-4 py-2 text-sm font-medium inline-flex items-center gap-1 border"
             style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
           >
@@ -2116,8 +2317,16 @@ function IssuanceView({ state, calc, actions, showToast }) {
         })}
       </div>
 
+      {modeChooser && (
+        <IssueModeModal
+          title={modeChooser === 'stock' ? '새 불출 등록' : '재고 추가 불출 등록'}
+          onPick={pickIssueMode}
+          onClose={() => setModeChooser(null)}
+        />
+      )}
       {showIssueModal && <IssueModal state={state} calc={calc} actions={actions} onClose={() => setShowIssueModal(false)} />}
       {showNewPropIssueModal && <NewPropertyIssueModal state={state} calc={calc} actions={actions} onClose={() => setShowNewPropIssueModal(false)} />}
+      {bulkMode && <BulkIssueModal state={state} calc={calc} actions={actions} mode={bulkMode} onClose={() => setBulkMode(null)} />}
     </div>
   );
 }
@@ -3147,7 +3356,7 @@ function MyAccountView({ currentAdmin, currentUserId, isAdmin, me, onChangePassw
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="6자 이상 입력"
+              placeholder="영문·숫자·특수문자 6자 이상"
               className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
               style={{ borderColor: 'var(--border)' }}
             />
@@ -3199,7 +3408,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [toast, setToast] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  // 모바일에서는 기본으로 접어두고, 넓은 화면에서는 펼쳐둡니다.
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768);
 
   const showToast = (msg, tone = 'success') => {
     setToast({ msg, tone });
@@ -3326,7 +3536,8 @@ export default function App() {
     const usernameError = validateUsername(trimmedUsername);
     if (usernameError) return { ok: false, message: usernameError };
     if (!MGMT_UNITS.includes(mgmtUnit)) return { ok: false, message: '등록할 제대를 선택해주세요.' };
-    if (password.length < 6) return { ok: false, message: '비밀번호는 6자 이상이어야 합니다.' };
+    const passwordError = validatePassword(password);
+    if (passwordError) return { ok: false, message: passwordError };
     if (!trimmedMilId || !birthDate) return { ok: false, message: '군번과 생년월일을 입력해주세요.' };
     // 로그인 전에는 state.admins 가 비어 있어서 클라이언트 상태로는 판단할 수 없습니다.
     // (예전에는 항상 "관리자 없음"으로 판정해 admin/active 로 등록을 시도하다가
@@ -3370,7 +3581,8 @@ export default function App() {
     const trimmed = (username || '').trim();
     const trimmedMilId = (militaryId || '').trim();
     if (!trimmed || !trimmedMilId || !birthDate || !newPassword) return { ok: false, message: '모든 항목을 입력해주세요.' };
-    if (newPassword.length < 6) return { ok: false, message: '비밀번호는 6자 이상이어야 합니다.' };
+    const passwordError = validatePassword(newPassword);
+    if (passwordError) return { ok: false, message: passwordError };
     const { data, error } = await supabase.rpc('verify_and_reset_password', {
       p_username: trimmed,
       p_military_id: trimmedMilId,
@@ -3383,7 +3595,8 @@ export default function App() {
   };
 
   const changeOwnPassword = async (newPassword) => {
-    if (!newPassword || newPassword.length < 6) return { ok: false, message: '비밀번호는 6자 이상이어야 합니다.' };
+    const passwordError = validatePassword(newPassword);
+    if (passwordError) return { ok: false, message: passwordError };
     const { error } = await supabase.auth.updateUser({ password: newPassword });
     if (error) return { ok: false, message: `변경에 실패했습니다: ${error.message}` };
     return { ok: true };
@@ -3714,6 +3927,56 @@ export default function App() {
       showToast('불출 처리가 완료되었습니다.');
       return true;
     },
+    // 품목 하나를 여러 인원에게 한 번에 불출합니다. persist 가 테이블 전체를
+    // 다시 쓰기 때문에, 인원별로 나눠 저장하지 않고 한 번에 반영합니다.
+    issueItemBulk: async ({ personIds, itemId, warehouseId, qtyPerPerson, reason, date }) => {
+      const q = Number(qtyPerPerson) || 0;
+      const targets = Array.from(new Set(personIds || []));
+      if (!targets.length || !itemId || !warehouseId) { showToast('품목·창고·인원을 모두 선택해주세요.', 'danger'); return false; }
+      if (q <= 0) { showToast('1인당 수량을 올바르게 입력해주세요.', 'danger'); return false; }
+      const total = q * targets.length;
+      const avail = calc.stockAt(itemId, warehouseId);
+      if (total > avail) { showToast('해당 창고의 보유수량을 초과하여 불출할 수 없습니다.', 'danger'); return false; }
+
+      const { stock } = consumeFromRows(state.stock, itemId, warehouseId, total);
+      let holdings = [...state.holdings];
+      targets.forEach((personId) => {
+        const existing = holdings.find((h) => h.itemId === itemId && h.personId === personId);
+        if (existing) holdings = holdings.map((h) => (h.id === existing.id ? { ...h, qty: h.qty + q } : h));
+        else holdings.push({ id: uid('hd'), itemId, personId, qty: q });
+      });
+      const detail = `${(reason || '').trim() || '일괄불출'} (일괄 ${targets.length}명 · 1인당 ${q})`;
+      const log = [...state.log, ...targets.map((personId) => makeLog({
+        type: 'issue', itemName: calc.itemName(itemId), qty: q,
+        warehouseName: calc.whName(warehouseId), personName: calc.personName(personId), detail,
+      }))];
+      await persist({ ...state, stock, holdings, log });
+      showToast(`${targets.length}명에게 불출 처리가 완료되었습니다.`);
+      return true;
+    },
+    issueNewPropertyBulk: async ({ personIds, itemId, qtyPerPerson, reason, date }) => {
+      const q = Number(qtyPerPerson) || 0;
+      const targets = Array.from(new Set(personIds || []));
+      if (!targets.length || !itemId) { showToast('품목과 인원을 모두 선택해주세요.', 'danger'); return false; }
+      if (q <= 0) { showToast('1인당 수량을 올바르게 입력해주세요.', 'danger'); return false; }
+      const total = q * targets.length;
+
+      const items = state.items.map((it) => (it.id === itemId ? { ...it, propertyQty: it.propertyQty + total } : it));
+      let holdings = [...state.holdings];
+      targets.forEach((personId) => {
+        const existing = holdings.find((h) => h.itemId === itemId && h.personId === personId);
+        if (existing) holdings = holdings.map((h) => (h.id === existing.id ? { ...h, qty: h.qty + q } : h));
+        else holdings.push({ id: uid('hd'), itemId, personId, qty: q });
+      });
+      const detail = `${(reason || '').trim() || '재산 신규 취득 후 즉시 불출'} (일괄 ${targets.length}명 · 1인당 ${q})`;
+      const log = [...state.log, ...targets.map((personId) => makeLog({
+        type: 'issueNew', itemName: calc.itemName(itemId), qty: q,
+        personName: calc.personName(personId), detail,
+      }))];
+      await persist({ ...state, items, holdings, log });
+      showToast(`재산 ${fmtNum(total)} 증가 및 ${targets.length}명 불출 처리가 완료되었습니다.`);
+      return true;
+    },
     issueNewProperty: async ({ personId, itemId, qty, reason, date }) => {
       const q = Number(qty) || 0;
       if (!personId || !itemId) { showToast('인원과 품목을 선택해주세요.', 'danger'); return false; }
@@ -3822,15 +4085,28 @@ export default function App() {
   return (
     <div className="jamul-root flex h-screen w-full overflow-hidden">
       <GlobalStyle />
-      <Sidebar
-        activeTab={safeActiveTab}
-        setActiveTab={setActiveTab}
-        state={state}
-        calc={calc}
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed((v) => !v)}
-        isAdmin={isAdmin}
-      />
+      {sidebarOpen && (
+        <>
+          {/* 좁은 화면에서는 사이드바가 본문 위에 겹치므로, 뒤를 눌러 닫을 수 있게 합니다. */}
+          <div
+            className="fixed inset-0 z-30 md:hidden"
+            style={{ background: 'rgba(14,24,38,0.45)' }}
+            onClick={() => setSidebarOpen(false)}
+          />
+          <Sidebar
+            activeTab={safeActiveTab}
+            setActiveTab={(tab) => {
+              setActiveTab(tab);
+              // 좁은 화면에서는 메뉴를 고르면 바로 닫아서 내용이 가려지지 않게 합니다.
+              if (typeof window !== 'undefined' && window.innerWidth < 768) setSidebarOpen(false);
+            }}
+            state={state}
+            calc={calc}
+            onToggle={() => setSidebarOpen(false)}
+            isAdmin={isAdmin}
+          />
+        </>
+      )}
       <div className="flex-1 flex flex-col min-w-0">
         <Topbar
           activeTab={safeActiveTab}
@@ -3842,8 +4118,10 @@ export default function App() {
           activeUnit={activeUnit}
           canSwitchUnit={isSuperAdmin}
           onSwitchUnit={switchUnit}
+          menuOpen={sidebarOpen}
+          onToggleMenu={() => setSidebarOpen((v) => !v)}
         />
-        <main className="flex-1 overflow-y-auto jamul-scrollbar p-6">
+        <main className="flex-1 overflow-y-auto jamul-scrollbar p-4 md:p-6">
           {safeActiveTab === 'dashboard' && <DashboardView state={state} calc={calc} setActiveTab={setActiveTab} />}
           {safeActiveTab === 'inventory' && <InventoryView state={state} calc={calc} actions={actions} />}
           {safeActiveTab === 'warehouses' && <WarehousesView state={state} calc={calc} actions={actions} setConfirmState={setConfirmState} />}
