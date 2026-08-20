@@ -2571,8 +2571,24 @@ function AdminEditModal({ target, adminActions, onClose }) {
   const [militaryId, setMilitaryId] = useState(target.militaryId || '');
   const [birthDate, setBirthDate] = useState(target.birthDate || '');
   const [submitting, setSubmitting] = useState(false);
+  const [usernameCheck, setUsernameCheck] = useState(null);
+  const [checkingUsername, setCheckingUsername] = useState(false);
+
+  // 아이디를 실제로 바꿨을 때만 중복확인을 요구합니다.
+  const usernameChanged = username.trim() !== (target.username || '');
+
+  const runUsernameCheck = async () => {
+    setCheckingUsername(true);
+    const result = await checkUsernameAvailable(username, target.id);
+    setCheckingUsername(false);
+    setUsernameCheck(result);
+  };
 
   const submit = async () => {
+    if (usernameChanged && !usernameCheck?.ok) {
+      setUsernameCheck({ ok: false, message: '아이디를 변경하려면 중복확인을 해주세요.' });
+      return;
+    }
     setSubmitting(true);
     const ok = await adminActions.adminUpdateAccount(target.id, { username, name, militaryId, birthDate });
     setSubmitting(false);
@@ -2584,7 +2600,28 @@ function AdminEditModal({ target, adminActions, onClose }) {
       <div className="space-y-3">
         <div>
           <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>아이디</label>
-          <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+          <div className="flex gap-2 mt-1">
+            <input
+              value={username}
+              onChange={(e) => { setUsername(e.target.value); setUsernameCheck(null); }}
+              className="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm jamul-focus"
+              style={{ borderColor: 'var(--border)' }}
+            />
+            <button
+              type="button"
+              onClick={runUsernameCheck}
+              disabled={checkingUsername}
+              className="shrink-0 border rounded-lg px-3 py-2 text-sm font-medium jamul-focus"
+              style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+            >
+              {checkingUsername ? '확인 중...' : '중복확인'}
+            </button>
+          </div>
+          {usernameCheck && (
+            <p className="text-xs mt-1" style={{ color: usernameCheck.ok ? 'var(--success)' : 'var(--danger)' }}>
+              {usernameCheck.message}
+            </p>
+          )}
         </div>
         <div>
           <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>이름</label>
