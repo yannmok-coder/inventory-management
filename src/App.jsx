@@ -159,7 +159,7 @@ const TYPE_LABEL = {
   maintenanceIn: '정비 입고',
   maintenanceDone: '정비 완료',
   maintenanceCancel: '정비 입고 취소',
-  rename: '품목명 변경',
+  rename: '품목 수정',
   issueNew: '신규 재산 불출',
   transferPerson: '인원간 이동',
 };
@@ -2667,47 +2667,117 @@ function AdjustPropertyModal({ itemId, state, calc, actions, onClose }) {
   );
 }
 
-function RenameItemModal({ group, actions, onClose }) {
-  const [name, setName] = useState(group.name);
+// 품목 수정. 묶음(사이즈 여러 종) 행에서 열면 이름·대분류·계절·상하의를 한 번에
+// 바꾸고, 사이즈·단위는 사이즈마다 달라서 개별 행에서만 수정하게 합니다.
+function EditItemModal({ group, actions, onClose }) {
+  const items = group.items;
+  const single = items.length === 1;
+  const first = items[0];
+
+  // 묶음 안에서 값이 서로 다른 항목은 건드리지 않은 채로 두기 위해 null 로 시작합니다.
+  const [name, setName] = useState(first.name);
+  const [category, setCategory] = useState(single ? itemCategory(first) : sharedValue(items, itemCategory));
+  const [season, setSeason] = useState(first.season || '');
+  const [part, setPart] = useState(single ? (first.part || '') : sharedValue(items, (x) => x.part || ''));
+  const [size, setSize] = useState(first.size || '');
+  const [unit, setUnit] = useState(first.unit || '');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const sizeCount = group.items.length;
+
+  const mixedPart = !single && sharedValue(items, (x) => x.part || '') === null;
+  const mixedCategory = !single && sharedValue(items, itemCategory) === null;
 
   const submit = async () => {
-    const trimmed = name.trim();
-    if (!trimmed) { setError('품목명을 입력해주세요.'); return; }
+    if (!name.trim()) { setError('품목명을 입력해주세요.'); return; }
+    const patch = { name, season };
+    if (category !== null) patch.category = category;
+    if (part !== null) patch.part = part;
+    if (single) { patch.size = size; patch.unit = unit; }
     setSubmitting(true);
-    const ok = await actions.renameItems(group.items.map((it) => it.id), trimmed);
+    const ok = await actions.editItems(items.map((it) => it.id), patch);
     setSubmitting(false);
     if (ok) onClose();
   };
 
   return (
-    <Modal title="품목명 수정" onClose={onClose}>
+    <Modal title="품목 수정" onClose={onClose}>
       <div className="space-y-3">
         <div>
-          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>현재 품목</label>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>수정 대상</label>
           <p className="text-sm mt-1" style={{ color: 'var(--ink)' }}>
-            {group.name}
-            {group.season && <span className="text-xs ml-1" style={{ color: 'var(--ink-soft)' }}>· {group.season}</span>}
-            {sizeCount > 1 && <span className="text-xs ml-1" style={{ color: 'var(--ink-soft)' }}>· 사이즈 {sizeCount}종</span>}
+            {first.name}
+            {first.season && <span className="text-xs ml-1" style={{ color: 'var(--ink-soft)' }}>· {first.season}</span>}
+            <span className="text-xs ml-1" style={{ color: 'var(--ink-soft)' }}>
+              · {single ? `사이즈 ${first.size || '미지정'}` : `사이즈 ${items.length}종 일괄`}
+            </span>
           </p>
         </div>
+
         <div>
-          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>새 품목명</label>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>대분류</label>
+          <div className="mt-1">
+            <CategoryTabs value={category} onChange={setCategory} size="sm" />
+          </div>
+          {mixedCategory && category === null && (
+            <p className="text-xs mt-1" style={{ color: 'var(--ink-soft)' }}>사이즈마다 대분류가 다릅니다. 고르지 않으면 그대로 둡니다.</p>
+          )}
+        </div>
+
+        <div>
+          <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>명칭</label>
           <input
             value={name}
             onChange={(e) => { setName(e.target.value); setError(''); }}
             onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
-            placeholder="새 품목명 입력"
             className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
             style={{ borderColor: 'var(--border)' }}
           />
         </div>
-        <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--warning-bg)', color: 'var(--warning)' }}>
-          {sizeCount > 1
-            ? `묶여 있는 사이즈 ${sizeCount}종의 이름이 함께 바뀝니다. `
-            : ''}
+
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>계절 구분</label>
+            <select value={season} onChange={(e) => setSeason(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }}>
+              <option value="">미지정</option>
+              <option value="동계">동계</option>
+              <option value="하계">하계</option>
+            </select>
+          </div>
+          <div className="flex-1">
+            <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>상/하의 구분</label>
+            <select
+              value={part === null ? '__keep__' : part}
+              onChange={(e) => setPart(e.target.value === '__keep__' ? null : e.target.value)}
+              className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              {mixedPart && <option value="__keep__">사이즈별로 다름 (유지)</option>}
+              <option value="">미지정</option>
+              <option value="상의">상의</option>
+              <option value="하의">하의</option>
+            </select>
+          </div>
+        </div>
+
+        {single ? (
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>사이즈</label>
+              <input value={size} onChange={(e) => setSize(e.target.value)} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+            </div>
+            <div className="flex-1">
+              <label className="text-xs font-medium" style={{ color: 'var(--ink-soft)' }}>단위</label>
+              <input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="예: 개, box" className="w-full mt-1 border rounded-lg px-3 py-2 text-sm jamul-focus" style={{ borderColor: 'var(--border)' }} />
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--warning-bg)', color: 'var(--warning)' }}>
+            사이즈 {items.length}종의 명칭·대분류·계절·상/하의가 함께 바뀝니다.
+            사이즈와 단위는 사이즈마다 달라서, 묶음을 펼친 뒤 각 줄의 [품목 수정]에서 바꿔주세요.
+          </p>
+        )}
+
+        <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>
           진행중인 폐기·정비 건의 품목명도 같이 수정됩니다. 물자 이동 로그에는 예전 이름이 기록으로 남습니다.
         </p>
         {error && (
@@ -2724,7 +2794,7 @@ function RenameItemModal({ group, actions, onClose }) {
 function ItemsView({ state, calc, actions, setConfirmState }) {
   const [showCreate, setShowCreate] = useState(false);
   const [adjustPropItem, setAdjustPropItem] = useState(null);
-  const [renameGroup, setRenameGroup] = useState(null);
+  const [editGroup, setEditGroup] = useState(null);
   const [category, setCategory] = useState(DEFAULT_CATEGORY);
   const [seasonFilter, setSeasonFilter] = useState('all');
   const [partFilter, setPartFilter] = useState('all');
@@ -2739,7 +2809,6 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
   // 같은 이름끼리 묶되 동계/하계는 따로 묶습니다. 정렬은 자음·모음 순.
   const groups = groupItemsByNameSeason(filteredItems);
 
-  // indent 된 행은 묶음에 속한 사이즈라서, 이름은 묶음 단위(부모 행)에서만 바꿉니다.
   const renderItemRow = (it, indent) => (
     <tr key={it.id} className="border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
       <td className={`px-4 py-3 ${indent ? 'pl-10' : 'font-medium'}`} style={{ color: indent ? 'var(--ink-soft)' : 'var(--ink)' }}>{it.name}</td>
@@ -2751,15 +2820,13 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
       <td className="px-4 py-3 text-right jamul-mono" style={{ color: calc.maintenanceQty(it.id) > 0 ? 'var(--warning)' : 'var(--ink-soft)' }}>{fmtNum(calc.maintenanceQty(it.id))}</td>
       <td className="px-4 py-3 text-right"><DiffBadge value={calc.diff(it)} /></td>
       <td className="px-4 py-3 text-right whitespace-nowrap">
-        {!indent && (
-          <button
-            onClick={() => setRenameGroup({ name: it.name, season: it.season || '', items: [it] })}
-            className="text-xs px-2.5 py-1.5 rounded-md border inline-flex items-center gap-1 mr-1"
-            style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
-          >
-            <Pencil size={12} />이름 수정
-          </button>
-        )}
+        <button
+          onClick={() => setEditGroup({ name: it.name, season: it.season || '', items: [it] })}
+          className="text-xs px-2.5 py-1.5 rounded-md border inline-flex items-center gap-1 mr-1"
+          style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
+        >
+          <Pencil size={12} />품목 수정
+        </button>
         <button onClick={() => setAdjustPropItem(it.id)} className="text-xs px-2.5 py-1.5 rounded-md border inline-flex items-center gap-1 mr-1" style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}>
           <Pencil size={12} />재산 수정
         </button>
@@ -2846,11 +2913,11 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
                     <td className="px-4 py-3 text-right"><DiffBadge value={totals.diff} /></td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       <button
-                        onClick={(e) => { e.stopPropagation(); setRenameGroup(g); }}
+                        onClick={(e) => { e.stopPropagation(); setEditGroup(g); }}
                         className="text-xs px-2.5 py-1.5 rounded-md border inline-flex items-center gap-1"
                         style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
                       >
-                        <Pencil size={12} />이름 수정
+                        <Pencil size={12} />품목 수정
                       </button>
                     </td>
                   </tr>
@@ -2862,7 +2929,7 @@ function ItemsView({ state, calc, actions, setConfirmState }) {
         </table>
       </div>
 
-      {renameGroup && <RenameItemModal group={renameGroup} actions={actions} onClose={() => setRenameGroup(null)} />}
+      {editGroup && <EditItemModal group={editGroup} actions={actions} onClose={() => setEditGroup(null)} />}
       {showCreate && <CreateItemModal state={state} actions={actions} onClose={() => setShowCreate(false)} />}
       {adjustPropItem && <AdjustPropertyModal itemId={adjustPropItem} state={state} calc={calc} actions={actions} onClose={() => setAdjustPropItem(null)} />}
     </div>
@@ -3971,40 +4038,68 @@ export default function App() {
       showToast(`'${item.name}' 품목이 등록되었습니다.`);
     },
     // 묶여있는 사이즈들의 이름을 한 번에 바꿉니다. 성공하면 true.
-    renameItems: async (itemIds, newName) => {
-      const trimmed = (newName || '').trim();
-      if (!trimmed) { showToast('품목명을 입력해주세요.', 'danger'); return false; }
+    // 품목의 이름·대분류·계절·상하의·사이즈·단위를 수정합니다.
+    // patch 에 담긴 키만 바꾸므로, 묶음 수정에서는 size/unit 을 빼고 넘기면
+    // 사이즈별 값이 그대로 유지됩니다. 성공하면 true.
+    editItems: async (itemIds, patch) => {
       const ids = new Set(itemIds);
       const targets = state.items.filter((it) => ids.has(it.id));
       if (targets.length === 0) return false;
-      const oldName = targets[0].name;
-      if (targets.every((it) => it.name === trimmed)) return true;
 
-      // 이름을 바꾼 뒤 같은 계절·사이즈 품목이 겹치면 막습니다.
-      const clash = targets.find((t) => state.items.some((x) => (
-        !ids.has(x.id)
-        && x.name === trimmed
-        && (x.season || '') === (t.season || '')
-        && (x.size || '') === (t.size || '')
-      )));
-      if (clash) {
-        showToast(`'${trimmed}' 에 같은 계절·사이즈(${clash.size || '사이즈 없음'}) 품목이 이미 있습니다.`, 'danger');
-        return false;
+      const apply = (it) => ({
+        ...it,
+        ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
+        ...(patch.category !== undefined ? { category: ITEM_CATEGORIES.includes(patch.category) ? patch.category : DEFAULT_CATEGORY } : {}),
+        ...(patch.season !== undefined ? { season: patch.season } : {}),
+        ...(patch.part !== undefined ? { part: patch.part } : {}),
+        ...(patch.size !== undefined ? { size: patch.size.trim() } : {}),
+        ...(patch.unit !== undefined ? { unit: patch.unit.trim() } : {}),
+      });
+      const updated = targets.map(apply);
+      if (updated.some((it) => !it.name)) { showToast('품목명을 입력해주세요.', 'danger'); return false; }
+
+      // 이름·계절·사이즈가 똑같은 품목이 둘 생기면 목록에서 구분할 수 없으므로 막습니다.
+      const keyOf = (it) => `${it.name}\u0000${it.season || ''}\u0000${it.size || ''}`;
+      const seen = new Set(state.items.filter((it) => !ids.has(it.id)).map(keyOf));
+      for (const it of updated) {
+        const key = keyOf(it);
+        if (seen.has(key)) {
+          showToast(`'${it.name}' 에 같은 계절·사이즈(${it.size || '사이즈 없음'}) 품목이 이미 있습니다.`, 'danger');
+          return false;
+        }
+        seen.add(key);
       }
 
-      const items = state.items.map((it) => (ids.has(it.id) ? { ...it, name: trimmed } : it));
+      const before = targets[0];
+      const after = updated[0];
+      const or = (v) => v || '미지정';
+      const changes = [];
+      if (before.name !== after.name) changes.push(`이름 '${before.name}' → '${after.name}'`);
+      if (itemCategory(before) !== itemCategory(after)) changes.push(`대분류 ${itemCategory(before)} → ${itemCategory(after)}`);
+      if ((before.season || '') !== (after.season || '')) changes.push(`계절 ${or(before.season)} → ${or(after.season)}`);
+      if ((before.part || '') !== (after.part || '')) changes.push(`상/하의 ${or(before.part)} → ${or(after.part)}`);
+      if ((before.size || '') !== (after.size || '')) changes.push(`사이즈 ${or(before.size)} → ${or(after.size)}`);
+      if ((before.unit || '') !== (after.unit || '')) changes.push(`단위 ${or(before.unit)} → ${or(after.unit)}`);
+      if (changes.length === 0) return true;
+
+      const patched = {};
+      updated.forEach((it) => { patched[it.id] = it; });
+      const items = state.items.map((it) => patched[it.id] || it);
+
       // 진행중인 폐기·정비 건에 복사돼 있는 품목명도 함께 맞춥니다.
       // 이동 로그는 당시의 기록이므로 예전 이름 그대로 둡니다.
-      const disposals = state.disposals.map((d) => (ids.has(d.itemId) ? { ...d, itemName: trimmed } : d));
-      const maintenance = state.maintenance.map((m) => (ids.has(m.itemId) ? { ...m, itemName: trimmed } : m));
+      const renamed = before.name !== after.name;
+      const disposals = renamed ? state.disposals.map((d) => (ids.has(d.itemId) ? { ...d, itemName: after.name } : d)) : state.disposals;
+      const maintenance = renamed ? state.maintenance.map((m) => (ids.has(m.itemId) ? { ...m, itemName: after.name } : m)) : state.maintenance;
+
       const log = [...state.log, makeLog({
         type: 'rename',
-        itemName: trimmed,
+        itemName: after.name,
         qty: 0,
-        detail: `품목명 변경: '${oldName}' → '${trimmed}'${targets.length > 1 ? ` (사이즈 ${targets.length}종)` : ''}`,
+        detail: `품목 수정: ${changes.join(', ')}${targets.length > 1 ? ` (사이즈 ${targets.length}종 일괄)` : ''}`,
       })];
       await persist({ ...state, items, disposals, maintenance, log });
-      showToast('품목명이 수정되었습니다.');
+      showToast('품목 정보가 수정되었습니다.');
       return true;
     },
     adjustProperty: async (itemId, delta, warehouseId) => {
